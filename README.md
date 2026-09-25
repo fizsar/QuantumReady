@@ -105,6 +105,53 @@ resultados_overhead.referencia.json     medición de referencia de la Fase 3
 - [Documentación detallada por fase](docs/fases.md): formatos, libro de reglas,
   modelo de riesgo, metodología del benchmark y estructura del informe.
 
+## De prueba de concepto a arquitectura de producto
+
+Tres de las cuatro fases corresponden a los tres componentes que necesitaría
+una plataforma de cripto-agilidad a escala de infraestructura; la cuarta
+(impacto en red) sería el banco de pruebas para dimensionarla.
+
+- **Agente de descubrimiento** (Fase 1 → producción): el escáner actual opera
+  sobre archivos de configuración locales, con un parser por formato
+  (sshd_config, nginx, Apache, IPsec, WireGuard, certificados X.509). En
+  producción, la lectura de archivos daría paso a una recolección continua
+  mediante agentes ligeros: hooks en los pipelines de CI/CD, análisis de
+  manifiestos de Kubernetes y Helm charts, e integración con balanceadores de
+  carga y API gateways para inventariar el TLS real en ejecución, no solo la
+  configuración estática. El motor de clasificación (`reglas.py`) y el modelo
+  de riesgo (`riesgo.py`) no dependen del origen del dato, así que cambiar la
+  fuente no obligaría a rediseñarlos. Lo que sí habría que automatizar es la
+  exposición y el alcance, que hoy se marcan a mano en el inventario.
+
+- **Gateway de transición híbrida** (Fase 2 → producción): el intercambio
+  ML-KEM-768 + X25519 se simula hoy entre cliente y servidor. En producción
+  sería un proxy TLS que termina las conexiones externas con negociación
+  híbrida (OpenSSL 3.5 o posterior y BoringSSL ya incluyen X25519MLKEM768 de
+  serie) y reenvía el tráfico al backend heredado con el esquema que este
+  admita. Se desplegaría como sidecar de service mesh (Envoy/Istio) o como
+  reverse proxy dedicado. Así no hay que tocar el software heredado, que en
+  infraestructura crítica suele ser el verdadero bloqueo de cualquier
+  migración. Tiene dos límites: el tramo entre el proxy y el backend sigue
+  siendo clásico, así que debe quedar dentro de una red de confianza; y el
+  proxy protege el intercambio de claves, no las firmas, porque su certificado
+  sigue siendo clásico.
+
+- **Pipeline de reporting** (Fase 4 → producción): el generador de PDF lee hoy
+  tres JSON estáticos. En producción, la misma lógica de agregación (riesgo
+  global por la regla del peor caso y reparto de los hallazgos según quién los
+  resuelve) alimentaría series temporales en lugar de fotos puntuales. Así se
+  podría seguir cómo se reduce la superficie de riesgo a lo largo de la
+  migración y generar evidencia auditable de forma continua, por ejemplo para
+  la gestión de riesgos que exige NIS2 o para la hoja de ruta coordinada de la
+  UE para la transición post-cuántica.
+
+El punto técnico de fondo: las fases ya están desacopladas, porque solo se
+comunican a través de archivos JSON, y es la condición necesaria para que cada
+una escale sin reescribir las demás. El siguiente paso sería formalizar esos
+formatos como esquemas versionados: cuando la Fase 4 necesitó un campo nuevo
+en la salida de la Fase 1 (`algoritmo_id`), el JSON antiguo solo se pudo
+detectar con una comprobación puntual.
+
 ## Licencia
 
 [GPL v3](LICENSE).

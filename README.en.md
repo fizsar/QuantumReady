@@ -107,6 +107,53 @@ resultados_overhead.referencia.json     Phase 3 reference measurement
 - [Detailed documentation by phase](docs/phases.md): formats, rulebook, risk
   model, benchmark methodology and report structure.
 
+## From proof of concept to product architecture
+
+Three of the four phases map onto the three components an
+infrastructure-scale crypto-agility platform would need; the fourth (network
+impact) would be the test bench to size it.
+
+- **Discovery agent** (Phase 1 → production): the current scanner works on
+  local configuration files, with one parser per format (sshd_config, nginx,
+  Apache, IPsec, WireGuard, X.509 certificates). In production, reading files
+  would give way to continuous collection through lightweight agents: hooks in
+  CI/CD pipelines, analysis of Kubernetes manifests and Helm charts, and
+  integration with load balancers and API gateways to inventory the TLS
+  actually running, not just the static configuration. The classification
+  engine (`reglas.py`) and the risk model (`riesgo.py`) do not depend on where
+  the data comes from, so changing the source would not require redesigning
+  them. What would need automating is exposure and reach, which are set by
+  hand in the inventory today.
+
+- **Hybrid transition gateway** (Phase 2 → production): the ML-KEM-768 +
+  X25519 exchange is simulated today between a client and a server. In
+  production it would be a TLS proxy that terminates external connections with
+  hybrid negotiation (OpenSSL 3.5 or later and BoringSSL already ship
+  X25519MLKEM768) and forwards the traffic to the legacy backend with whatever
+  scheme that backend supports. It would be deployed as a service-mesh sidecar
+  (Envoy/Istio) or as a dedicated reverse proxy. That avoids touching legacy
+  software, which in critical infrastructure is usually what actually blocks
+  any migration. It has two limits: the leg between the proxy and the backend
+  remains classical, so it must stay within a trusted network; and the proxy
+  protects key exchange, not signatures, because its certificate is still
+  classical.
+
+- **Reporting pipeline** (Phase 4 → production): the PDF generator reads
+  three static JSON files today. In production, the same aggregation logic
+  (worst-case overall risk and splitting findings by who solves them) would
+  feed time series instead of point-in-time snapshots. That would make it
+  possible to track how the risk surface shrinks over the course of the
+  migration and to produce auditable evidence continuously, for example for
+  the risk management NIS2 requires or for the EU's coordinated roadmap for
+  the transition to post-quantum cryptography.
+
+The underlying technical point: the phases are already decoupled, because
+they only communicate through JSON files, and that is the precondition for
+each one to scale without rewriting the others. The next step would be to
+formalise those formats as versioned schemas: when Phase 4 needed a new field
+in Phase 1's output (`algoritmo_id`), the old JSON could only be detected
+with a one-off check.
+
 ## Licence
 
 [GPL v3](LICENSE).
