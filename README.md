@@ -1,5 +1,7 @@
 # Quantum Ready
 
+[![Tests](https://github.com/fizsar/QuantumReady/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/fizsar/QuantumReady/actions/workflows/tests.yml)
+
 **Español** · [English](README.en.md)
 
 Escáner de cripto-agilidad y pruebas de intercambio de claves post-cuántico
