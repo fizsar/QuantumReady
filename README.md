@@ -78,6 +78,33 @@ Niveles: 0 Ninguno · 1–3 Bajo · 4–7 Medio · 8–11 Alto · 12–16 Urgent
   (nombres sin regla en el libro, para revisar a mano).
 - **Resumen legible** por la salida estándar, agrupado por servicio y algoritmo.
 
+## Fase 2 — Intercambio de claves híbrido
+
+Simulación de un intercambio híbrido ML-KEM-768 + X25519 entre Cliente y Servidor
+([quantum_ready/tunel/](quantum_ready/tunel/)):
+
+```bash
+python -m quantum_ready.tunel            # -o para cambiar el JSON de salida
+```
+
+1. El Servidor genera pares X25519 y ML-KEM-768; el Cliente, un par X25519.
+2. El Servidor envía sus claves públicas.
+3. El Cliente encapsula contra la pública ML-KEM (secreto + ciphertext), hace
+   X25519 con la pública del Servidor y envía su pública X25519 y el ciphertext.
+4. El Servidor decapsula el ciphertext y hace X25519 con la pública del Cliente.
+5. Cada parte deriva por separado `HKDF-SHA384(secreto_ML-KEM || secreto_X25519)`
+   → clave de 32 bytes, y se comprueba que coinciden. El orden (ML-KEM primero)
+   es el del estándar X25519MLKEM768 (TLS 1.3) y mlkem768x25519-sha256 (OpenSSH).
+6. Un Atacante con solo los datos de red lo intenta con sus propias claves
+   privadas, tratando los datos públicos como secretos y re-encapsulando; no
+   obtiene la clave.
+
+Muestra cada clave y secreto (actor, tipo, tamaño y extracto hexadecimal), una
+tabla de tamaños y las comprobaciones ✅/❌. Los tamaños se guardan en
+`resultados_intercambio.json` para el análisis de overhead de la Fase 3, junto
+con los bytes en red del híbrido (2336) y de un intercambio solo X25519 (64).
+El programa termina con código 1 si alguna comprobación falla.
+
 ## Tests
 
 ```bash
