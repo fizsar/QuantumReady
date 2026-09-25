@@ -24,6 +24,19 @@ def _voltear_bit(datos: bytes) -> bytes:
     return bytes([datos[0] ^ 1]) + datos[1:]
 
 
+def _intercambio(manipular_cliente=None, manipular_servidor=None):
+    """Cliente → Servidor → Cliente, con manipulación opcional de cada mensaje."""
+    cliente, servidor = Cliente(), Servidor()
+    publicas = cliente.claves_publicas()
+    if manipular_cliente:
+        publicas = manipular_cliente(publicas)
+    respuesta = servidor.responder(publicas)
+    if manipular_servidor:
+        respuesta = manipular_servidor(respuesta)
+    cliente.recibir(respuesta)
+    return cliente, servidor, publicas, respuesta
+
+
 # (a) Cliente y Servidor coinciden --------------------------------------------------
 def test_cliente_y_servidor_obtienen_la_misma_clave():
     r = ejecutar_intercambio()
@@ -36,6 +49,29 @@ def test_cada_intercambio_produce_una_clave_distinta():
     assert ejecutar_intercambio().clave_servidor != ejecutar_intercambio().clave_servidor
 
 
+# Papeles de X25519MLKEM768: el Cliente genera ML-KEM, el Servidor encapsula --------
+def test_solo_el_cliente_tiene_par_ml_kem():
+    cliente, servidor, publicas, respuesta = _intercambio()
+    assert isinstance(cliente._mlkem, mlkem.MLKEM768PrivateKey)
+    assert not hasattr(servidor, "_mlkem")
+    assert publicas.mlkem768 == cliente._mlkem.public_key().public_bytes_raw()
+
+
+def test_el_servidor_encapsula_y_el_cliente_decapsula():
+    cliente, servidor, _, respuesta = _intercambio()
+    assert cliente._mlkem.decapsulate(respuesta.mlkem768_ciphertext) == servidor.secreto_mlkem
+    elementos = [(e.actor, e.elemento) for e in cliente.registro + servidor.registro]
+    assert ("Servidor", "Secreto ML-KEM (encapsulado)") in elementos
+    assert ("Cliente", "Secreto ML-KEM (decapsulado)") in elementos
+
+
+def test_key_shares_en_orden_estandar():
+    _, _, publicas, respuesta = _intercambio()
+    assert publicas.key_share == publicas.mlkem768 + publicas.x25519
+    assert respuesta.key_share == respuesta.mlkem768_ciphertext + respuesta.x25519
+    assert (len(publicas.key_share), len(respuesta.key_share)) == (1216, 1120)
+
+
 # (b) El Atacante no coincide -------------------------------------------------------
 def test_el_atacante_no_obtiene_la_clave():
     r = ejecutar_intercambio()
@@ -44,36 +80,26 @@ def test_el_atacante_no_obtiene_la_clave():
 
 
 def test_el_atacante_solo_ve_datos_publicos():
-    servidor, cliente = Servidor(), Cliente()
-    publicas = servidor.claves_publicas()
-    respuesta = cliente.responder(publicas)
+    cliente, servidor, publicas, respuesta = _intercambio()
     atacante = Atacante()
     atacante.observar(publicas, respuesta)
     # Lo observado no contiene ningún secreto ni clave privada
-    observado = (publicas.x25519 + publicas.mlkem768 + respuesta.x25519
-                 + respuesta.mlkem768_ciphertext)
-    for secreto in (cliente.secreto_x25519, cliente.secreto_mlkem,
-                    servidor._x25519.private_bytes_raw(),
-                    servidor._mlkem.private_bytes_raw()):
+    observado = publicas.key_share + respuesta.key_share
+    for secreto in (servidor.secreto_x25519, servidor.secreto_mlkem,
+                    cliente._x25519.private_bytes_raw(),
+                    cliente._mlkem.private_bytes_raw()):
         assert secreto not in observado
 
 
 # (c) Cambiar una sola clave rompe la coincidencia ----------------------------------
-@pytest.mark.parametrize("manipular_servidor, manipular_cliente", [
-    (lambda m: replace(m, x25519=_otra_x25519()), None),
+@pytest.mark.parametrize("manipular_cliente, manipular_servidor", [
     (lambda m: replace(m, mlkem768=_otra_mlkem()), None),
-    (None, lambda m: replace(m, x25519=_otra_x25519())),
+    (lambda m: replace(m, x25519=_otra_x25519()), None),
     (None, lambda m: replace(m, mlkem768_ciphertext=_voltear_bit(m.mlkem768_ciphertext))),
-], ids=["x25519-servidor", "mlkem-servidor", "x25519-cliente", "ciphertext-1-bit"])
-def test_cambiar_un_elemento_rompe_la_coincidencia(manipular_servidor, manipular_cliente):
-    servidor, cliente = Servidor(), Cliente()
-    publicas = servidor.claves_publicas()
-    if manipular_servidor:
-        publicas = manipular_servidor(publicas)
-    respuesta = cliente.responder(publicas)
-    if manipular_cliente:
-        respuesta = manipular_cliente(respuesta)
-    servidor.recibir(respuesta)
+    (None, lambda m: replace(m, x25519=_otra_x25519())),
+], ids=["mlkem-cliente", "x25519-cliente", "ciphertext-1-bit", "x25519-servidor"])
+def test_cambiar_un_elemento_rompe_la_coincidencia(manipular_cliente, manipular_servidor):
+    cliente, servidor, _, _ = _intercambio(manipular_cliente, manipular_servidor)
     assert cliente.derivar() != servidor.derivar()
 
 
@@ -86,7 +112,7 @@ def test_cambiar_un_byte_de_cualquier_secreto_cambia_la_clave(cual):
 
 
 # Orden de concatenación: ML-KEM || X25519, como X25519MLKEM768 (TLS 1.3) --------
-MLKEM, X = b"" * 32, b"" * 32
+MLKEM, X = b"\x01" * 32, b"\x02" * 32
 
 
 def _hkdf_de_referencia(entrada: bytes) -> bytes:
@@ -116,8 +142,7 @@ def test_los_secretos_solo_se_pasan_por_nombre():
 
 def test_cliente_y_servidor_usan_el_orden_estandar():
     """Extremo a extremo: la clave de ambos actores es HKDF(ML-KEM || X25519)."""
-    servidor, cliente = Servidor(), Cliente()
-    servidor.recibir(cliente.responder(servidor.claves_publicas()))
+    cliente, servidor, _, _ = _intercambio()
     for actor in (cliente, servidor):
         clave = actor.derivar()
         assert clave == _hkdf_de_referencia(actor.secreto_mlkem + actor.secreto_x25519)
@@ -133,9 +158,17 @@ def test_tamanos_json():
         "mlkem768_ciphertext": 1088,
         "clave_final": 32,
     }
-    assert datos["bytes_en_red"]["total"] == 32 + 1184 + 32 + 1088
     assert datos["verificacion"] == {"cliente_servidor_coinciden": True,
                                      "atacante_coincide": False}
+
+
+def test_bytes_en_red_por_direccion_real():
+    red = resultados_json(ejecutar_intercambio())["bytes_en_red"]
+    assert red == {
+        "cliente_a_servidor": 1184 + 32,   # pública ML-KEM + pública X25519
+        "servidor_a_cliente": 1088 + 32,   # ciphertext + pública X25519
+        "total": 2336,
+    }
 
 
 def test_main_escribe_el_json(tmp_path, capsys):

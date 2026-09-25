@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .actores import (Atacante, Cliente, ClavesPublicasServidor, Evento, Intento,
-                      RespuestaCliente, Servidor)
+from .actores import (Atacante, Cliente, ClavesPublicasCliente, Evento, Intento,
+                      RespuestaServidor, Servidor)
 from .cripto import ESQUEMA, LONGITUD_CLAVE_FINAL
 
 BYTES_INICIO, BYTES_FIN = 8, 4  # extracto hexadecimal: 8 primeros … 4 últimos
@@ -26,8 +26,8 @@ X25519_PUBLICA = 32
 class ResultadoIntercambio:
     registro: list[Evento]
     pasos: list[tuple[str, int, int]]  # (título, primer evento, último evento)
-    claves_servidor: ClavesPublicasServidor
-    respuesta_cliente: RespuestaCliente
+    claves_cliente: ClavesPublicasCliente
+    respuesta_servidor: RespuestaServidor
     clave_cliente: bytes
     clave_servidor: bytes
     intentos_atacante: list[Intento]
@@ -50,21 +50,21 @@ def ejecutar_intercambio() -> ResultadoIntercambio:
         pasos.append((titulo, desde, len(registro)))
 
     i = len(registro)
-    servidor = Servidor(registro)
     cliente = Cliente(registro)
+    servidor = Servidor(registro)
     paso("1. Generación de claves", i)
 
     i = len(registro)
-    claves_servidor = servidor.claves_publicas()
-    paso("2. Intercambio de claves públicas: Servidor → Cliente", i)
+    claves_cliente = cliente.claves_publicas()
+    paso("2. Intercambio de claves públicas: Cliente → Servidor (ClientHello)", i)
 
     i = len(registro)
-    respuesta = cliente.responder(claves_servidor)
-    paso("3. Encapsulación (Cliente) y respuesta Cliente → Servidor", i)
+    respuesta = servidor.responder(claves_cliente)
+    paso("3. Encapsulación (Servidor) y respuesta Servidor → Cliente (ServerHello)", i)
 
     i = len(registro)
-    servidor.recibir(respuesta)
-    paso("4. Decapsulación (Servidor)", i)
+    cliente.recibir(respuesta)
+    paso("4. Decapsulación (Cliente)", i)
 
     i = len(registro)
     clave_cliente = cliente.derivar()
@@ -73,11 +73,11 @@ def ejecutar_intercambio() -> ResultadoIntercambio:
 
     i = len(registro)
     atacante = Atacante(registro)
-    atacante.observar(claves_servidor, respuesta)
+    atacante.observar(claves_cliente, respuesta)
     intentos = atacante.intentar()
     paso("6. Ataque: solo con los datos públicos interceptados", i)
 
-    return ResultadoIntercambio(registro, pasos, claves_servidor, respuesta,
+    return ResultadoIntercambio(registro, pasos, claves_cliente, respuesta,
                                 clave_cliente, clave_servidor, intentos)
 
 
@@ -90,31 +90,34 @@ def extracto(datos: bytes) -> str:
 
 def tamanos(r: ResultadoIntercambio) -> dict[str, int]:
     return {
-        "x25519_clave_publica": len(r.claves_servidor.x25519),
-        "mlkem768_clave_publica": len(r.claves_servidor.mlkem768),
-        "mlkem768_ciphertext": len(r.respuesta_cliente.mlkem768_ciphertext),
+        "x25519_clave_publica": len(r.claves_cliente.x25519),
+        "mlkem768_clave_publica": len(r.claves_cliente.mlkem768),
+        "mlkem768_ciphertext": len(r.respuesta_servidor.mlkem768_ciphertext),
         "clave_final": len(r.clave_servidor),
     }
 
 
 def resultados_json(r: ResultadoIntercambio) -> dict:
-    """Tamaños para el análisis de overhead de la Fase 3."""
-    t = tamanos(r)
-    servidor_a_cliente = t["x25519_clave_publica"] + t["mlkem768_clave_publica"]
-    cliente_a_servidor = t["x25519_clave_publica"] + t["mlkem768_ciphertext"]
+    """Tamaños para el análisis de overhead de la Fase 3.
+
+    Cada dirección es el key_share real de X25519MLKEM768: el Cliente envía
+    su pública ML-KEM + pública X25519; el Servidor, ciphertext + pública X25519.
+    """
+    cliente_a_servidor = len(r.claves_cliente.key_share)
+    servidor_a_cliente = len(r.respuesta_servidor.key_share)
     return {
         "fase": 2,
         "esquema": ESQUEMA,
         "generado": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "tamanos_bytes": t,
+        "tamanos_bytes": tamanos(r),
         "bytes_en_red": {
-            "servidor_a_cliente": servidor_a_cliente,
             "cliente_a_servidor": cliente_a_servidor,
-            "total": servidor_a_cliente + cliente_a_servidor,
+            "servidor_a_cliente": servidor_a_cliente,
+            "total": cliente_a_servidor + servidor_a_cliente,
         },
         "referencia_solo_x25519": {
-            "servidor_a_cliente": X25519_PUBLICA,
             "cliente_a_servidor": X25519_PUBLICA,
+            "servidor_a_cliente": X25519_PUBLICA,
             "total": 2 * X25519_PUBLICA,
         },
         "verificacion": {
@@ -156,6 +159,8 @@ def informe_texto(r: ResultadoIntercambio) -> str:
     s.extend(f"  {nombre:<28} {n:>6}" for nombre, n in filas)
     red, clasico = datos["bytes_en_red"], datos["referencia_solo_x25519"]
     s.append(f"  {'─' * 28} {'─' * 6}")
+    s.append(f"  {'Cliente → Servidor':<28} {red['cliente_a_servidor']:>6}")
+    s.append(f"  {'Servidor → Cliente':<28} {red['servidor_a_cliente']:>6}")
     s.append(f"  {'Total en red (híbrido)':<28} {red['total']:>6}")
     s.append(f"  {'Total en red (solo X25519)':<28} {clasico['total']:>6}")
 

@@ -87,11 +87,15 @@ Simulación de un intercambio híbrido ML-KEM-768 + X25519 entre Cliente y Servi
 python -m quantum_ready.tunel            # -o para cambiar el JSON de salida
 ```
 
-1. El Servidor genera pares X25519 y ML-KEM-768; el Cliente, un par X25519.
-2. El Servidor envía sus claves públicas.
-3. El Cliente encapsula contra la pública ML-KEM (secreto + ciphertext), hace
-   X25519 con la pública del Servidor y envía su pública X25519 y el ciphertext.
-4. El Servidor decapsula el ciphertext y hace X25519 con la pública del Cliente.
+Los papeles son los del estándar X25519MLKEM768 (TLS 1.3) y
+mlkem768x25519-sha256 (OpenSSH):
+
+1. El Cliente genera pares ML-KEM-768 y X25519; el Servidor, un par X25519.
+2. Cliente → Servidor (ClientHello): pública ML-KEM + pública X25519 (1216 B).
+3. El Servidor encapsula contra la pública ML-KEM del Cliente (secreto +
+   ciphertext) y hace X25519 con la pública del Cliente.
+   Servidor → Cliente (ServerHello): ciphertext + pública X25519 (1120 B).
+4. El Cliente decapsula el ciphertext y hace X25519 con la pública del Servidor.
 5. Cada parte deriva por separado `HKDF-SHA384(secreto_ML-KEM || secreto_X25519)`
    → clave de 32 bytes, y se comprueba que coinciden. El orden (ML-KEM primero)
    es el del estándar X25519MLKEM768 (TLS 1.3) y mlkem768x25519-sha256 (OpenSSH).
@@ -102,7 +106,8 @@ python -m quantum_ready.tunel            # -o para cambiar el JSON de salida
 Muestra cada clave y secreto (actor, tipo, tamaño y extracto hexadecimal), una
 tabla de tamaños y las comprobaciones ✅/❌. Los tamaños se guardan en
 `resultados_intercambio.json` para el análisis de overhead de la Fase 3, junto
-con los bytes en red del híbrido (2336) y de un intercambio solo X25519 (64).
+con los bytes en red en cada dirección (`cliente_a_servidor` 1216,
+`servidor_a_cliente` 1120, total 2336) y los de un intercambio solo X25519 (64).
 El programa termina con código 1 si alguna comprobación falla.
 
 ## Tests
