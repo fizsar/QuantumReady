@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date
 from pathlib import Path
 
@@ -9,8 +10,11 @@ from quantum_ready.escaner import escanear
 from quantum_ready.informe.generador import (
     ErrorEntrada, FilaCoste, cargar_entradas, datos_empresa, encuadre_coste, familia,
     generar, main, reparto_solucion, riesgo_global, uso)
-from quantum_ready.informe.traducciones import IDIOMAS, TEXTOS, Traductor, marcadores
+from quantum_ready.informe.maqueta import nombre_algoritmo
+from quantum_ready.informe.traducciones import (ALGORITMOS_NEUTROS, IDIOMAS, TEXTOS,
+                                                Traductor, marcadores)
 from quantum_ready.inventario import cargar
+from quantum_ready.reglas import ALGORITMOS
 from quantum_ready.tunel.hibrido import ejecutar_intercambio, resultados_json
 
 RAIZ = Path(__file__).parent.parent
@@ -246,12 +250,84 @@ def test_ambos_idiomas_igual_de_completos(pdfs):
     assert abs(len(es.pages) - len(en.pages)) <= 1
 
 
-def test_pdf_en_ingles_sin_textos_en_castellano(pdfs):
-    texto = "\n".join(p.extract_text() for p in PdfReader(pdfs["en"]).pages)
-    for resto in ("Prioridad", "Qué ocurre", "Resumen ejecutivo", "Página",
-                  "Hallazgos", "en modo CBC", "sin PresharedKey", "clave pública"):
-        assert resto not in texto
-    assert "Executive summary" in texto
+# --- Nada en castellano en el PDF en inglés, tampoco en los datos ----------------------
+# Letras propias del castellano y palabras que no existen en inglés. Se aplica a
+# TODO el texto extraído del PDF: plantillas y valores de datos de las tablas.
+_CASTELLANO = re.compile(
+    r"[áéíóúñÁÉÍÓÚÑ¿¡]"
+    r"|\b(sin|con|de|del|en|para|clave|firma|modo|híbrido|servidor|cliente|"
+    r"Prioridad|Hallazgos|Resumen|Página|Casos)\b")
+
+
+def restos_en_castellano(texto: str, empresa: str) -> list[str]:
+    # El nombre de la empresa es un dato del cliente y se muestra tal cual
+    return [linea for linea in texto.replace(empresa, "").splitlines()
+            if _CASTELLANO.search(linea)]
+
+
+def _texto(ruta: Path) -> str:
+    return "\n".join(p.extract_text() for p in PdfReader(ruta).pages)
+
+
+def test_detector_de_castellano():
+    assert restos_en_castellano("ML-KEM híbrido", "X")
+    assert restos_en_castellano("WireGuard sin PresharedKey", "X")
+    assert not restos_en_castellano("ML-KEM hybrid · ejemplos/vpn/wg0.conf:7", "X")
+
+
+def test_pdf_en_ingles_sin_castellano(pdfs):
+    empresa = datos_empresa("en")["nombre"]
+    assert restos_en_castellano(_texto(pdfs["en"]), empresa) == []
+    assert "Executive summary" in _texto(pdfs["en"])
+
+
+@pytest.mark.parametrize("id_", sorted(ALGORITMOS))
+def test_cada_algoritmo_es_neutro_o_tiene_traduccion(id_):
+    """Obliga a decidir, para cada algoritmo nuevo del libro de reglas, cómo se
+    llama en el informe: nombre neutro o etiqueta traducida (no ambas)."""
+    traducido = all(f"tecnico.{id_}" in TEXTOS[i] for i in IDIOMAS)
+    assert (id_ in ALGORITMOS_NEUTROS) != traducido
+    if id_ in ALGORITMOS_NEUTROS:
+        assert not restos_en_castellano(ALGORITMOS[id_].nombre, "")
+
+
+@pytest.fixture(scope="module")
+def pdf_todos_los_algoritmos(entradas_reales, tmp_path_factory):
+    """PDF en inglés con un hallazgo por cada algoritmo (y su variante CBC)."""
+    fase1, fase2, fase3 = entradas_reales
+    datos = json.loads(fase1.read_text(encoding="utf-8"))
+    plantilla = datos["hallazgos"][0]
+    sinteticos = []
+    for id_, alg in ALGORITMOS.items():
+        variantes = [(id_, alg.nombre)]
+        if id_ in ("AES-128", "AES-192", "AES-256", "3DES"):
+            variantes.append((f"{id_}-CBC", f"{alg.nombre} en modo CBC"))
+        for vid, nombre in variantes:
+            sinteticos.append({**plantilla, "algoritmo_id": vid, "algoritmo": nombre,
+                               "categoria": alg.categoria.value, "valor": "value"})
+    datos["hallazgos"] = sinteticos + datos["hallazgos"]
+    carpeta = tmp_path_factory.mktemp("todos")
+    ruta1 = carpeta / "informe.json"
+    ruta1.write_text(json.dumps(datos), encoding="utf-8")
+    return generar(cargar_entradas(ruta1, fase2, fase3), "en", carpeta / "en.pdf",
+                   datos_empresa("en"), date(2026, 9, 26))
+
+
+def test_ningun_nombre_de_algoritmo_en_castellano_en_ingles(pdf_todos_los_algoritmos):
+    texto = _texto(pdf_todos_los_algoritmos)
+    assert restos_en_castellano(texto, datos_empresa("en")["nombre"]) == []
+    for nombre in ("ML-KEM hybrid", "sntrup761 + X25519", "AES-256 in CBC mode",
+                   "without PresharedKey"):
+        assert nombre in texto
+
+
+def test_nombre_algoritmo():
+    en, es = Traductor("en"), Traductor("es")
+    assert nombre_algoritmo("ML-KEM-HIBRIDO", en) == "ML-KEM hybrid"
+    assert nombre_algoritmo("ML-KEM-HIBRIDO", es) == "ML-KEM híbrido"
+    assert nombre_algoritmo("AES-256-CBC", en) == "AES-256 in CBC mode"
+    assert nombre_algoritmo("RSA", en) == "RSA"
+    assert nombre_algoritmo("DESCONOCIDO", en, "respaldo") == "respaldo"
 
 
 def test_pdf_cuenta_la_verdad_sobre_el_coste(pdfs):

@@ -13,6 +13,17 @@ import string
 
 IDIOMAS = ("es", "en")
 
+# Algoritmos cuyo nombre del libro de reglas (reglas.ALGORITMOS) es técnico y
+# vale igual en ambos idiomas. Todo algoritmo que NO esté aquí necesita una
+# entrada "tecnico.<id>" en TEXTOS: un test obliga a decidir una de las dos
+# cosas para cada algoritmo nuevo, para que ningún nombre en castellano del
+# escáner acabe en el informe en inglés.
+ALGORITMOS_NEUTROS = frozenset({
+    "RSA", "DH", "ECDH", "ECDSA", "DSA", "3DES", "RC4", "MD5", "SHA-1",
+    "TLS-1.0/1.1", "SSL", "AES-128", "AES-192", "AES-256", "CHACHA20", "SHA-256",
+    "SHA-384/512", "TLS-1.2", "TLS-1.3", "ML-KEM", "ML-DSA", "SLH-DSA",
+})
+
 TEXTOS: dict[str, dict[str, str | tuple[str, str]]] = {
     # =========================================================================
     "es": {
@@ -281,6 +292,8 @@ TEXTOS: dict[str, dict[str, str | tuple[str, str]]] = {
         "escenario.mlkem768": "ML-KEM-768",
         "escenario.hibrido": "Híbrido",
         "tecnico.cbc": "{base} en modo CBC",
+        "tecnico.ML-KEM-HIBRIDO": "ML-KEM híbrido",
+        "tecnico.SNTRUP-HIBRIDO": "sntrup761 + X25519 híbrido",
         "tecnico.WG-SIN-PSK": "WireGuard Curve25519 sin PresharedKey",
         "tecnico.WG-CON-PSK": "WireGuard Curve25519 + PresharedKey",
         "tecnico.directiva.clave pública": "clave pública",
@@ -540,6 +553,8 @@ TEXTOS: dict[str, dict[str, str | tuple[str, str]]] = {
         "escenario.mlkem768": "ML-KEM-768",
         "escenario.hibrido": "Hybrid",
         "tecnico.cbc": "{base} in CBC mode",
+        "tecnico.ML-KEM-HIBRIDO": "ML-KEM hybrid",
+        "tecnico.SNTRUP-HIBRIDO": "sntrup761 + X25519 hybrid",
         "tecnico.WG-SIN-PSK": "WireGuard Curve25519 without PresharedKey",
         "tecnico.WG-CON-PSK": "WireGuard Curve25519 + PresharedKey",
         "tecnico.directiva.clave pública": "public key",

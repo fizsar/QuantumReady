@@ -19,8 +19,9 @@ from reportlab.platypus import (Flowable, KeepTogether, ListFlowable, ListItem,
                                 PageBreak, Paragraph, SimpleDocTemplate, Spacer,
                                 Table, TableStyle)
 
-from .generador import Analisis, agrupar, encuadre_coste, familia
-from .traducciones import Traductor
+from ..reglas import ALGORITMOS
+from .generador import Analisis, agrupar, encuadre_coste
+from .traducciones import ALGORITMOS_NEUTROS, Traductor
 
 MARGEN = 2.2 * cm
 ANCHO = A4[0] - 2 * MARGEN
@@ -179,12 +180,20 @@ def _marca(ok: bool, texto: str, e: dict, ancho: float = ANCHO) -> Table:
     return tabla
 
 
-def _nombre_tecnico(h: dict, t: Traductor) -> str:
-    id_ = h["algoritmo_id"]
+def nombre_algoritmo(id_: str, t: Traductor, respaldo: str | None = None) -> str:
+    """Nombre del algoritmo en el idioma del informe, a partir de su id.
+
+    Nunca usa el nombre en castellano del escáner salvo que el algoritmo sea
+    neutro (ALGORITMOS_NEUTROS). ``respaldo`` solo se usa con ids desconocidos
+    (un informe.json de otra versión del escáner).
+    """
     if id_.endswith("-CBC"):
-        base = h["algoritmo"].split(" en modo CBC")[0]
-        return t("tecnico.cbc", base=base)
-    return t(f"tecnico.{id_}") if t.existe(f"tecnico.{id_}") else h["algoritmo"]
+        return t("tecnico.cbc", base=nombre_algoritmo(id_[:-len("-CBC")], t, respaldo))
+    if id_ in ALGORITMOS_NEUTROS and id_ in ALGORITMOS:
+        return ALGORITMOS[id_].nombre
+    if t.existe(f"tecnico.{id_}"):
+        return t(f"tecnico.{id_}")
+    return respaldo or id_
 
 
 def _directiva(directiva: str, t: Traductor) -> str:
@@ -460,7 +469,7 @@ def _apendice(a: Analisis, t: Traductor, e: dict) -> list:
             _p(t(f"categoria.{h['categoria']}"), e["mini"]),
             _p(h["servicio"] or t("sin_datos"), e["mini"]),
             _p(f"{h['archivo']}:{h['linea']}", e["mini_corte"]),
-            _p(_nombre_tecnico(h, t), e["mini"]),
+            _p(nombre_algoritmo(h["algoritmo_id"], t, h["algoritmo"]), e["mini"]),
             _p(f"{_directiva(h['directiva'], t)}: {h['valor']}", e["mini_corte"]),
         ])
     anchos = [1.7 * cm, 2.3 * cm, 2.0 * cm, 3.6 * cm, 3.1 * cm]
