@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 informe.json
 resultados_intercambio.json
+resultados_overhead.json

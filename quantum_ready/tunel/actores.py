@@ -32,6 +32,18 @@ class Evento:
 
 # --- Mensajes de red (lo único que ve el Atacante) -------------------------------
 # Los campos siguen el orden del key_share de X25519MLKEM768: ML-KEM primero.
+MLKEM768_PUBLICA = 1184
+MLKEM768_CIPHERTEXT = 1088
+X25519_PUBLICA = 32
+
+
+def _partir(datos: bytes, primera: int, mensaje: str) -> tuple[bytes, bytes]:
+    esperado = primera + X25519_PUBLICA
+    if len(datos) != esperado:
+        raise ValueError(f"{mensaje}: se esperaban {esperado} bytes, llegaron {len(datos)}")
+    return datos[:primera], datos[primera:]
+
+
 @dataclass(frozen=True)
 class ClavesPublicasCliente:
     """Cliente → Servidor (key_share del ClientHello)."""
@@ -41,6 +53,10 @@ class ClavesPublicasCliente:
     @property
     def key_share(self) -> bytes:
         return self.mlkem768 + self.x25519
+
+    @classmethod
+    def desde_key_share(cls, datos: bytes) -> "ClavesPublicasCliente":
+        return cls(*_partir(datos, MLKEM768_PUBLICA, "key_share del Cliente"))
 
 
 @dataclass(frozen=True)
@@ -52,6 +68,10 @@ class RespuestaServidor:
     @property
     def key_share(self) -> bytes:
         return self.mlkem768_ciphertext + self.x25519
+
+    @classmethod
+    def desde_key_share(cls, datos: bytes) -> "RespuestaServidor":
+        return cls(*_partir(datos, MLKEM768_CIPHERTEXT, "key_share del Servidor"))
 
 
 # --- Actores ---------------------------------------------------------------------

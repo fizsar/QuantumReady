@@ -1,10 +1,21 @@
-# Quantum Ready — Escáner de cripto-agilidad (Fase 1)
+# Quantum Ready
 
-Detecta en archivos de configuración y certificados los algoritmos que romperá
-(o debilitará) un ordenador cuántico, y los prioriza según la exposición y el
-alcance de cada servicio.
+**Español** · [English](README.en.md)
 
-## Uso
+Herramientas para preparar una infraestructura para la criptografía
+post-cuántica:
+
+1. **Escáner de cripto-agilidad** — detecta en archivos de configuración y
+   certificados los algoritmos que romperá (o debilitará) un ordenador cuántico,
+   y los prioriza según la exposición y el alcance de cada servicio.
+2. **Intercambio de claves híbrido** — simulación de ML-KEM-768 + X25519 con los
+   papeles y el orden del estándar X25519MLKEM768 (TLS 1.3).
+3. **Impacto en red** — mide sobre TCP real el coste en bytes y tiempo de
+   X25519, ML-KEM-768 e híbrido con distintos perfiles de latencia.
+
+## Fase 1 — Escáner de cripto-agilidad
+
+### Uso
 
 ```bash
 python -m venv .venv
@@ -26,7 +37,7 @@ Sin `-i`, se usa `./inventario.yaml` si existe. Los archivos que no pertenecen a
 ningún servicio se escanean igual, pero su riesgo combinado queda **sin evaluar**:
 el escáner no adivina exposición ni alcance.
 
-## Formatos soportados
+### Formatos soportados
 
 | Formato | Qué se analiza |
 |---|---|
@@ -39,7 +50,7 @@ el escáner no adivina exposición ni alcance.
 
 El formato se detecta por nombre de archivo y, si no basta, por contenido.
 
-## Libro de reglas
+### Libro de reglas
 
 Todas las clasificaciones viven en [quantum_ready/reglas.py](quantum_ready/reglas.py):
 `ALGORITMOS` (categoría, recomendación y motivo) y `PATRONES` (cómo se reconoce
@@ -54,7 +65,10 @@ cada nombre). Reglas destacadas:
 - **WireGuard.** Peer sin PresharedKey → 🔴 Crítico; con PresharedKey → 🟡
   Advertencia, con la explicación en el informe.
 
-## Riesgo combinado
+Categorías: 🔴 Crítico (roto por Shor) · 🟡 Advertencia (debilitado por Grover) ·
+⚪ Obsoleto (roto por motivos clásicos) · 🟢 Aceptable · 🔵 Post-cuántico.
+
+### Riesgo combinado
 
 `Riesgo = Categoría × Exposición × Alcance` (0–16), en
 [quantum_ready/riesgo.py](quantum_ready/riesgo.py).
@@ -69,7 +83,7 @@ cada nombre). Reglas destacadas:
 
 Niveles: 0 Ninguno · 1–3 Bajo · 4–7 Medio · 8–11 Alto · 12–16 Urgente.
 
-## Salida
+### Salida
 
 - **JSON** (`informe.json`): `resumen`, `servicios` (riesgo máximo y conteo por
   categoría), `hallazgos` (archivo, línea, directiva, valor, algoritmo, categoría,
@@ -109,6 +123,52 @@ tabla de tamaños y las comprobaciones ✅/❌. Los tamaños se guardan en
 con los bytes en red en cada dirección (`cliente_a_servidor` 1216,
 `servidor_a_cliente` 1120, total 2336) y los de un intercambio solo X25519 (64).
 El programa termina con código 1 si alguna comprobación falla.
+
+## Fase 3 — Impacto en red
+
+Mide el coste real (bytes y tiempo) de tres intercambios de claves sobre TCP en
+localhost, con latencia artificial para simular distintas redes
+([quantum_ready/red/](quantum_ready/red/)):
+
+```bash
+python -m quantum_ready.red                       # 100 repeticiones, ~7 min
+python -m quantum_ready.red -n 10 --perfiles fibra,4g   # prueba rápida
+```
+
+- **Escenarios:** X25519 puro, ML-KEM-768 puro e híbrido (los actores de la
+  Fase 2, con los papeles de X25519MLKEM768).
+- **Perfiles** (latencia por tramo, aplicada antes de cada envío; un handshake
+  tiene dos tramos): Fibra 2 ms · 4G 50 ms · Satélite LEO 25 ms · Satélite GEO 600 ms.
+- **Tiempo medido:** desde que el Cliente empieza a generar claves (con la
+  conexión TCP ya abierta) hasta que tiene la clave final. El Servidor deriva la
+  suya antes de responder, así que en ese momento ambas partes la tienen.
+- **Metodología:** el Servidor corre en un proceso aparte (con hilos, la
+  contención del GIL añadía ~0,5 ms por handshake); los escenarios se alternan
+  dentro de cada perfil para repartir cualquier deriva del sistema, y se
+  descartan 2 handshakes de calentamiento por combinación (el primero de cada
+  proceso es 25-60 ms más lento).
+
+Salida: tabla escenario × perfil (media ± desviación y bytes), overhead del
+híbrido frente a X25519 en bytes y en tiempo por perfil, y
+`resultados_overhead.json` con cada ejecución, los agregados (media, desviación,
+mediana, mín., máx. y tiempo sin la latencia inyectada) y el contraste con los
+bytes de la Fase 2 si existe `resultados_intercambio.json`.
+
+La latencia se simula sin modelo de ancho de banda: el tamaño de los mensajes
+solo influye en el tiempo a través del cómputo y de la pila TCP local.
+
+### Resultados en el equipo de referencia
+
+100 ejecuciones por celda; tiempo medio del handshake completo.
+
+| Escenario | Fibra (2 ms) | 4G (50 ms) | LEO (25 ms) | GEO (600 ms) | Bytes |
+|---|---|---|---|---|---|
+| X25519 | 4,84 ms | 100,96 ms | 50,88 ms | 1201,00 ms | 64 |
+| ML-KEM-768 | 5,15 ms | 101,51 ms | 51,26 ms | 1201,63 ms | 2272 |
+| Híbrido | 5,76 ms | 102,03 ms | 51,78 ms | 1202,11 ms | 2336 |
+
+El híbrido cuesta ~1 ms más que X25519 en todos los perfiles: +19 % en fibra,
+pero solo +0,1 % en satélite GEO. En bytes es +3550 % (+2272 B).
 
 ## Tests
 
