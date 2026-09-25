@@ -4,3 +4,4 @@ __pycache__/
 informe.json
 resultados_intercambio.json
 resultados_overhead.json
+.claude/
