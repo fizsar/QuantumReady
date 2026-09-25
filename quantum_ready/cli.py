@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 from .escaner import escanear
-from .informe import resumen_texto
 from .inventario import ErrorInventario, cargar
+from .resumen import resumen_texto
 from .riesgo import NIVELES
 
 

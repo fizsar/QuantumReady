@@ -11,6 +11,8 @@ Tools to prepare an infrastructure for post-quantum cryptography:
    roles and ordering of the X25519MLKEM768 standard (TLS 1.3).
 3. **Network impact** — measures, over real TCP, the byte and time cost of
    X25519, ML-KEM-768 and hybrid key exchange under different latency profiles.
+4. **Executive report** — a PDF in Spanish or English that translates the
+   results of the three phases for executives with no cryptography background.
 
 The tool's output, command-line options and file names are in Spanish.
 
@@ -172,6 +174,44 @@ through computation and the local TCP stack.
 
 The hybrid costs about 1 ms more than X25519 in every profile: +19 % on fibre
 but only +0.1 % on GEO satellite. In bytes it is +3550 % (+2272 B).
+
+## Phase 4 — Executive report
+
+Generates a PDF for management from the results of Phases 1-3
+([quantum_ready/informe/](quantum_ready/informe/)):
+
+```bash
+python -m quantum_ready -i ejemplos/inventario.yaml     # Phase 1 → informe.json
+python -m quantum_ready.tunel                           # Phase 2 → resultados_intercambio.json
+python -m quantum_ready.informe --idioma en             # → informe_ejecutivo_en.pdf
+python -m quantum_ready.informe --idioma es --empresa ejemplos/empresa.yaml
+```
+
+Phase 3 is read from `resultados_overhead.referencia.json`, the reference
+measurement included in the repository (to regenerate it:
+`python -m quantum_ready.red -o resultados_overhead.referencia.json`). Paths
+can be changed with `--fase1`, `--fase2` and `--fase3`. Company details come
+from `--empresa` (YAML), from `--empresa-nombre`, `--empresa-sector` and
+`--empresa-contacto`, or from a fictitious default company.
+
+Sections: cover, executive summary, findings by priority, the proposed
+solution, cost of the migration, what remains to be done and technical
+appendix. Each one is an entry in the PDF's outline.
+
+- **Worst-case overall risk:** any Urgent → Critical; otherwise any High →
+  High; otherwise any Medium → Medium; otherwise Low.
+- **What the solution solves, without overstating it:** priority findings are
+  split into key exchange (solved by the hybrid tunnel), signatures (pending on
+  the post-quantum ecosystem) and configuration (fixable today). RSA is
+  classified by where it appears: in host keys, certificates, `authby` or
+  `ECDHE-RSA-…` suites it is a signature; only RSA key transport
+  (`TLS_RSA_WITH_…`) counts as key exchange.
+- **Cost stated from the data:** the sentence about added time is derived from
+  the measurements ("less than 1 ms on every / most profiles" only when true;
+  otherwise the approximate value and range).
+- **Bilingual:** every text lives in
+  [traducciones.py](quantum_ready/informe/traducciones.py); tests check that
+  both languages have the same keys and placeholders.
 
 ## Tests
 

@@ -12,6 +12,8 @@ post-cuántica:
    papeles y el orden del estándar X25519MLKEM768 (TLS 1.3).
 3. **Impacto en red** — mide sobre TCP real el coste en bytes y tiempo de
    X25519, ML-KEM-768 e híbrido con distintos perfiles de latencia.
+4. **Informe ejecutivo** — PDF en castellano o inglés que traduce los
+   resultados de las tres fases para directivos sin conocimientos de criptografía.
 
 ## Fase 1 — Escáner de cripto-agilidad
 
@@ -169,6 +171,44 @@ solo influye en el tiempo a través del cómputo y de la pila TCP local.
 
 El híbrido cuesta ~1 ms más que X25519 en todos los perfiles: +19 % en fibra,
 pero solo +0,1 % en satélite GEO. En bytes es +3550 % (+2272 B).
+
+## Fase 4 — Informe ejecutivo
+
+Genera un PDF para dirección a partir de los resultados de las Fases 1-3
+([quantum_ready/informe/](quantum_ready/informe/)):
+
+```bash
+python -m quantum_ready -i ejemplos/inventario.yaml     # Fase 1 → informe.json
+python -m quantum_ready.tunel                           # Fase 2 → resultados_intercambio.json
+python -m quantum_ready.informe --idioma es             # → informe_ejecutivo_es.pdf
+python -m quantum_ready.informe --idioma en --empresa ejemplos/empresa.yaml
+```
+
+La Fase 3 se lee de `resultados_overhead.referencia.json`, la medición de
+referencia incluida en el repositorio (para regenerarla:
+`python -m quantum_ready.red -o resultados_overhead.referencia.json`). Las rutas
+se cambian con `--fase1`, `--fase2` y `--fase3`. Los datos de la empresa salen
+de `--empresa` (YAML), de `--empresa-nombre`, `--empresa-sector` y
+`--empresa-contacto`, o de una empresa ficticia por defecto.
+
+Secciones: portada, resumen ejecutivo, hallazgos por prioridad, la solución
+propuesta, coste de la migración, qué queda pendiente y apéndice técnico. Cada
+una es una entrada del índice del PDF.
+
+- **Riesgo global por el peor caso:** algún Urgente → Crítico; si no, algún
+  Alto → Alto; si no, algún Medio → Medio; si no, Bajo.
+- **Qué resuelve la solución, sin exagerar:** los hallazgos prioritarios se
+  reparten entre intercambio de claves (los resuelve el túnel híbrido), firmas
+  (pendientes del ecosistema post-cuántico) y configuración (se corrigen hoy).
+  RSA se clasifica según dónde aparece: en claves de host, certificados,
+  `authby` o suites `ECDHE-RSA-…` es una firma; solo el transporte de claves
+  RSA (`TLS_RSA_WITH_…`) es intercambio.
+- **Coste contado con los datos:** la frase sobre el tiempo añadido se deriva
+  de las mediciones ("menos de 1 ms en todos / en la mayoría de perfiles" solo
+  si es cierto; si no, el valor aproximado y el rango).
+- **Bilingüe:** todos los textos están en
+  [traducciones.py](quantum_ready/informe/traducciones.py); los tests comprueban
+  que ambos idiomas tienen las mismas claves y marcadores.
 
 ## Tests
 

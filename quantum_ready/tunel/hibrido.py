@@ -123,6 +123,10 @@ def resultados_json(r: ResultadoIntercambio) -> dict:
         "verificacion": {
             "cliente_servidor_coinciden": r.coinciden,
             "atacante_coincide": r.atacante_coincide,
+            "intentos_atacante": len(r.intentos_atacante),
+            "intentos_atacante_fallidos": sum(
+                1 for i in r.intentos_atacante
+                if not hmac.compare_digest(i.clave, r.clave_servidor)),
         },
     }
 

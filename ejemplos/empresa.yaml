@@ -1,0 +1,8 @@
+# Datos de la empresa para el informe ejecutivo (Fase 4):
+#   python -m quantum_ready.informe --idioma es --empresa ejemplos/empresa.yaml
+# Cada campo puede ser un texto o un texto por idioma.
+nombre: Ejemplo Energía S.L.
+sector:
+  es: Energía y servicios públicos
+  en: Energy and utilities
+contacto: seguridad@ejemplo-energia.test

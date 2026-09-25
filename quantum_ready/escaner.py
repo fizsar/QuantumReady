@@ -104,6 +104,7 @@ def escanear(rutas: list[Path], inventario: Inventario | None = None) -> dict:
                 "directiva": d.directiva,
                 "valor": d.valor,
                 "algoritmo": alg.nombre,
+                "algoritmo_id": alg.id,
                 "categoria": alg.categoria.value,
                 "riesgo": riesgo,
                 "recomendacion": alg.recomendacion,

@@ -159,7 +159,9 @@ def test_tamanos_json():
         "clave_final": 32,
     }
     assert datos["verificacion"] == {"cliente_servidor_coinciden": True,
-                                     "atacante_coincide": False}
+                                     "atacante_coincide": False,
+                                     "intentos_atacante": 3,
+                                     "intentos_atacante_fallidos": 3}
 
 
 def test_bytes_en_red_por_direccion_real():
