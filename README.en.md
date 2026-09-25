@@ -2,219 +2,111 @@
 
 [Español](README.md) · **English**
 
-Tools to prepare an infrastructure for post-quantum cryptography:
+Crypto-agility scanner and post-quantum key exchange experiments
+(ML-KEM + X25519), with an executive report for management.
 
-1. **Crypto-agility scanner** — finds, in configuration files and certificates,
-   the algorithms a quantum computer will break (or weaken), and prioritises
-   them by each service's exposure and reach.
-2. **Hybrid key exchange** — a simulation of ML-KEM-768 + X25519 using the
-   roles and ordering of the X25519MLKEM768 standard (TLS 1.3).
-3. **Network impact** — measures, over real TCP, the byte and time cost of
-   X25519, ML-KEM-768 and hybrid key exchange under different latency profiles.
-4. **Executive report** — a PDF in Spanish or English that translates the
-   results of the three phases for executives with no cryptography background.
+## Why it exists
 
-The tool's output, command-line options and file names are in Spanish.
+Almost all the encryption protecting the internet today, from websites to VPNs
+and remote server access, relies on mathematical problems that a quantum
+computer will be able to solve. The risk has already started: an attacker can
+record encrypted traffic today and decrypt it once that computer exists
+("harvest now, decrypt later"). This project answers the questions an
+organisation needs to settle before migrating: what is exposed, how to protect
+it, what it costs, and how to explain it to management.
 
-## Phase 1 — Crypto-agility scanner
+## What it does
 
-### Usage
+| Phase | What it does | Result with the example data |
+|---|---|---|
+| **1. Scanner** | Reads SSH, nginx, Apache, strongSwan, WireGuard and certificate configurations, and rates every algorithm by quantum and classical risk, weighted by each service's exposure and reach. | 84 findings across 4 services; 22 urgent. |
+| **2. Hybrid exchange** | Simulates TLS 1.3's ML-KEM-768 + X25519 key exchange between a client and a server, plus an attacker who only sees the traffic. | Both sides obtain the same key; the attacker fails all 3 attempts. |
+| **3. Network impact** | Measures 1,200 handshakes over real TCP with fibre, 4G and satellite (LEO and GEO) latencies. | The hybrid adds ~1 ms per connection: +19 % on fibre, +0.1 % on GEO satellite. |
+| **4. Executive report** | Produces a PDF in Spanish or English for executives with no cryptography background. | Overall risk and what the solution solves: 11 of 36 priority findings, without overstating it. |
+
+## How to run it
+
+Tested with Python 3.13. The tool's output, command-line options and
+file names are in Spanish.
 
 ```bash
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt   # Windows
 # .venv/bin/python -m pip install -r requirements.txt     # Linux/macOS
+# (in the commands below, python = the one in .venv)
 
-# Scan everything listed in the inventory
+# Phase 1 — scan the example configurations → informe.json
 python -m quantum_ready -i ejemplos/inventario.yaml
 
-# Scan specific paths (matched to their inventory service when there is one)
-python -m quantum_ready ejemplos/bastion ejemplos/vpn/wg0.conf -i ejemplos/inventario.yaml
+# Phase 2 — hybrid key exchange → resultados_intercambio.json
+python -m quantum_ready.tunel
 
-# Options
-#   -o informe.json          JSON output file ('-' = standard output)
-#   --nivel-minimo Medio     detail findings from this risk level up (default Alto)
-```
+# Phase 3 — network impact (100 repetitions, ~7 min; -n 10 for a quick run)
+python -m quantum_ready.red -o resultados_overhead.referencia.json
 
-Without `-i`, `./inventario.yaml` is used if present. Files that belong to no
-service are still scanned, but their combined risk is left **unevaluated**: the
-scanner never guesses exposure or reach.
-
-### Supported formats
-
-| Format | What is analysed |
-|---|---|
-| `sshd_config` / `ssh_config` | KexAlgorithms, Ciphers, MACs, HostKeyAlgorithms, PubkeyAccepted*, CASignatureAlgorithms, HostKey |
-| nginx | ssl_protocols, ssl_ciphers, ssl_ecdh_curve, ssl_conf_command |
-| Apache | SSLProtocol (resolves `all -X`), SSLCipherSuite, SSLOpenSSLConfCmd |
-| strongSwan (`ipsec.conf`, `swanctl.conf`) | ike/esp/proposals, authby/leftauth/rightauth |
-| WireGuard (`wg*.conf`) | PresharedKey per `[Peer]` |
-| Certificates (`.pem`, `.crt`, `.cer`, `.der`) | public key (type and size) and signature (algorithm and hash), multi-block chains |
-
-The format is detected from the file name and, when that is not enough, from
-the content.
-
-### Rulebook
-
-All classifications live in [quantum_ready/reglas.py](quantum_ready/reglas.py):
-`ALGORITMOS` (category, recommendation and rationale) and `PATRONES` (how each
-name is recognised). Notable rules:
-
-- **Hybrids first.** `mlkem768x25519-sha256`, `sntrup761x25519-sha512`,
-  `X25519MLKEM768`… are checked before any substring and stop the search, so
-  they are not flagged 🔴 for containing `x25519`. In IPsec, a proposal with
-  ML-KEM plus a classical key exchange counts as hybrid.
-- **CBC mode.** Any cipher in CBC mode (explicit, or implicit in OpenSSL names
-  without GCM/CCM such as `ECDHE-RSA-AES128-SHA256`) becomes ⚪ Obsolete.
-- **WireGuard.** Peer without PresharedKey → 🔴 Critical; with PresharedKey →
-  🟡 Warning, with the reasoning explained in the report.
-
-Categories: 🔴 Critical (broken by Shor) · 🟡 Warning (weakened by Grover) ·
-⚪ Obsolete (broken for classical reasons) · 🟢 Acceptable · 🔵 Post-quantum.
-
-### Combined risk
-
-`Risk = Category × Exposure × Reach` (0–16), in
-[quantum_ready/riesgo.py](quantum_ready/riesgo.py).
-
-| Category | Weight | | Factor | Weight |
-|---|---|---|---|---|
-| 🔴 Critical | 4 | | Exposure high / low | 2 / 1 |
-| ⚪ Obsolete | 3 | | Reach high / low | 2 / 1 |
-| 🟡 Warning | 2 | | | |
-| 🟢 Acceptable | 1 | | | |
-| 🔵 Post-quantum | 0 | | | |
-
-Levels: 0 None · 1–3 Low · 4–7 Medium · 8–11 High · 12–16 Urgent.
-
-### Output
-
-- **JSON** (`informe.json`): `resumen` (summary), `servicios` (worst risk and
-  count per category), `hallazgos` (findings: file, line, directive, value,
-  algorithm, category, risk with its formula, recommendation and rationale),
-  `avisos` (warnings: unevaluated defaults, OpenSSL aliases, referenced
-  certificates…) and `no_reconocidos` (names with no rule, to review by hand).
-- **Human-readable summary** on standard output, grouped by service and algorithm.
-
-## Phase 2 — Hybrid key exchange
-
-Simulation of an ML-KEM-768 + X25519 hybrid exchange between a Client and a
-Server ([quantum_ready/tunel/](quantum_ready/tunel/)):
-
-```bash
-python -m quantum_ready.tunel            # -o to change the output JSON
-```
-
-Roles follow the X25519MLKEM768 (TLS 1.3) and mlkem768x25519-sha256 (OpenSSH)
-standards:
-
-1. The Client generates ML-KEM-768 and X25519 key pairs; the Server, an X25519 pair.
-2. Client → Server (ClientHello): ML-KEM public key + X25519 public key (1216 B).
-3. The Server encapsulates against the Client's ML-KEM public key (secret +
-   ciphertext) and runs X25519 with the Client's public key.
-   Server → Client (ServerHello): ciphertext + X25519 public key (1120 B).
-4. The Client decapsulates the ciphertext and runs X25519 with the Server's
-   public key.
-5. Each side separately derives `HKDF-SHA384(ML-KEM_secret || X25519_secret)`
-   → a 32-byte key, and both keys are checked to match. The order (ML-KEM
-   first) is the one used by X25519MLKEM768 (TLS 1.3) and
-   mlkem768x25519-sha256 (OpenSSH).
-6. An Attacker with only the network data tries with its own private keys, by
-   treating the public data as secrets, and by re-encapsulating; it never gets
-   the key.
-
-It prints every key and secret (actor, type, size and a hex excerpt), a size
-table and ✅/❌ checks. Sizes are saved to `resultados_intercambio.json` for the
-Phase 3 overhead analysis, together with the bytes on the wire in each
-direction (`cliente_a_servidor` 1216, `servidor_a_cliente` 1120, total 2336)
-and those of an X25519-only exchange (64). The program exits with code 1 if any
-check fails.
-
-## Phase 3 — Network impact
-
-Measures the real cost (bytes and time) of three key exchanges over TCP on
-localhost, with artificial latency to simulate different networks
-([quantum_ready/red/](quantum_ready/red/)):
-
-```bash
-python -m quantum_ready.red                             # 100 repetitions, ~7 min
-python -m quantum_ready.red -n 10 --perfiles fibra,4g   # quick run
-```
-
-- **Scenarios:** pure X25519, pure ML-KEM-768 and hybrid (the Phase 2 actors,
-  with X25519MLKEM768 roles).
-- **Profiles** (latency per leg, applied before each send; a handshake has two
-  legs): Fibre 2 ms · 4G 50 ms · LEO satellite 25 ms · GEO satellite 600 ms.
-- **Measured time:** from when the Client starts generating keys (with the TCP
-  connection already open) until it holds the final key. The Server derives its
-  key before replying, so at that point both sides have it.
-- **Methodology:** the Server runs in a separate process (with threads, GIL
-  contention added ~0.5 ms per handshake); scenarios are interleaved within
-  each profile to spread any system drift, and 2 warm-up handshakes are
-  discarded per combination (the first one in each process is 25–60 ms slower).
-
-Output: a scenario × profile table (mean ± standard deviation and bytes), the
-hybrid's overhead versus X25519 in bytes and time per profile, and
-`resultados_overhead.json` with every run, the aggregates (mean, standard
-deviation, median, min, max and time without the injected latency) and a
-cross-check against the Phase 2 bytes when `resultados_intercambio.json` exists.
-
-Latency is simulated without a bandwidth model: message size only affects time
-through computation and the local TCP stack.
-
-### Results on the reference machine
-
-100 runs per cell; mean time of the full handshake.
-
-| Scenario | Fibre (2 ms) | 4G (50 ms) | LEO (25 ms) | GEO (600 ms) | Bytes |
-|---|---|---|---|---|---|
-| X25519 | 4.84 ms | 100.96 ms | 50.88 ms | 1201.00 ms | 64 |
-| ML-KEM-768 | 5.15 ms | 101.51 ms | 51.26 ms | 1201.63 ms | 2272 |
-| Hybrid | 5.76 ms | 102.03 ms | 51.78 ms | 1202.11 ms | 2336 |
-
-The hybrid costs about 1 ms more than X25519 in every profile: +19 % on fibre
-but only +0.1 % on GEO satellite. In bytes it is +3550 % (+2272 B).
-
-## Phase 4 — Executive report
-
-Generates a PDF for management from the results of Phases 1-3
-([quantum_ready/informe/](quantum_ready/informe/)):
-
-```bash
-python -m quantum_ready -i ejemplos/inventario.yaml     # Phase 1 → informe.json
-python -m quantum_ready.tunel                           # Phase 2 → resultados_intercambio.json
-python -m quantum_ready.informe --idioma en             # → informe_ejecutivo_en.pdf
+# Phase 4 — executive PDF report
+python -m quantum_ready.informe --idioma en
 python -m quantum_ready.informe --idioma es --empresa ejemplos/empresa.yaml
+
+# Tests
+python -m pytest
 ```
 
-Phase 3 is read from `resultados_overhead.referencia.json`, the reference
-measurement included in the repository (to regenerate it:
-`python -m quantum_ready.red -o resultados_overhead.referencia.json`). Paths
-can be changed with `--fase1`, `--fase2` and `--fase3`. Company details come
-from `--empresa` (YAML), from `--empresa-nombre`, `--empresa-sector` and
-`--empresa-contacto`, or from a fictitious default company.
+The repository includes the Phase 3 reference measurement, so Phases 1, 2 and
+4 work without re-running the benchmark.
 
-Sections: cover, executive summary, findings by priority, the proposed
-solution, cost of the migration, what remains to be done and technical
-appendix. Each one is an entry in the PDF's outline.
+## Example output
 
-- **Worst-case overall risk:** any Urgent → Critical; otherwise any High →
-  High; otherwise any Medium → Medium; otherwise Low.
-- **What the solution solves, without overstating it:** priority findings are
-  split into key exchange (solved by the hybrid tunnel), signatures (pending on
-  the post-quantum ecosystem) and configuration (fixable today). RSA is
-  classified by where it appears: in host keys, certificates, `authby` or
-  `ECDHE-RSA-…` suites it is a signature; only RSA key transport
-  (`TLS_RSA_WITH_…`) counts as key exchange.
-- **Cost stated from the data:** the sentence about added time is derived from
-  the measurements ("less than 1 ms on every / most profiles" only when true;
-  otherwise the approximate value and range).
-- **Bilingual:** every text lives in
-  [traducciones.py](quantum_ready/informe/traducciones.py); tests check that
-  both languages have the same keys and placeholders.
+Executive summary of the PDF generated from the example configurations:
 
-## Tests
+![Executive summary of the PDF report](docs/img/resumen_en.png)
 
-```bash
-.venv/Scripts/python -m pytest
+## Project structure
+
 ```
+quantum_ready/
+├── reglas.py, riesgo.py, escaner.py…   Phase 1: rulebook, risk model and scanner
+├── parsers/                            SSH, nginx, Apache, IPsec, WireGuard, certificates
+├── tunel/                              Phase 2: client, server and attacker
+├── red/                                Phase 3: TCP sockets with injected latency
+└── informe/                            Phase 4: PDF and es/en translations
+ejemplos/                               example configurations, inventory and company
+tests/                                  tests for the 4 phases
+docs/                                   detailed documentation by phase
+resultados_overhead.referencia.json     Phase 3 reference measurement
+```
+
+## Status
+
+**4 phases complete · 365 tests (pytest) · tested on Windows with Python 3.13.**
+
+## Notable technical decisions
+
+- **The standard's concatenation order.** The hybrid secret is
+  `ML-KEM || X25519`, as in X25519MLKEM768 (TLS 1.3) and mlkem768x25519
+  (OpenSSH). Tests check it against a separately computed HKDF, because client
+  and server would still agree with the order reversed.
+- **The standard's roles.** The client generates the ML-KEM key pair and the
+  server encapsulates, the reverse of the initial specification. The total
+  bytes were the same (2,336), but not the bytes in each direction
+  (1,216 / 1,120).
+- **RSA by context.** In the example configurations, every priority RSA
+  finding was a signature (host keys, certificates, `ECDHE-RSA`), not a key
+  exchange. Counting them as "solved by the hybrid tunnel" would have inflated
+  the result from 11 to 18 findings.
+- **Measuring without contamination.** In the benchmark the server runs in a
+  separate process: with threads, Python's GIL contention added ~0.5 ms per
+  handshake, the same order of magnitude as the cost being measured.
+- **Statements derived from the data.** The report does not claim "under 1 ms
+  on most networks" because that only held on 2 of 4. The wording is derived
+  from the measurements, and a test checks that the English PDF contains no
+  Spanish, data included.
+
+## Documentation
+
+- [Detailed documentation by phase](docs/phases.md): formats, rulebook, risk
+  model, benchmark methodology and report structure.
+
+## Licence
+
+[GPL v3](LICENSE).

@@ -462,7 +462,7 @@ def _apendice(a: Analisis, t: Traductor, e: dict) -> list:
                          "valor")], e["mini_cab"])]
     for h in hallazgos:
         r = h["riesgo"]
-        riesgo = (f"{t(f'nivel.{r['nivel']}')} ({r['puntuacion']})" if r
+        riesgo = (f"{t('nivel.' + r['nivel'])} ({r['puntuacion']})" if r
                   else t("sin_datos"))
         filas.append([
             _p(riesgo, e["mini"]),
