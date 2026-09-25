@@ -1,0 +1,28 @@
+# Exposición: alta (accesible desde internet) | baja (solo red interna)
+# Alcance:    alto (da acceso a toda la red o varios sistemas) | bajo (solo ese servidor)
+servicios:
+  - nombre: bastion-ssh
+    tipo: ssh
+    ruta: bastion/sshd_config
+    exposicion: alta
+    alcance: alto
+
+  - nombre: web-publica
+    tipo: tls
+    ruta: web              # carpeta: nginx.conf y certificados
+    exposicion: alta
+    alcance: bajo
+
+  - nombre: intranet
+    tipo: tls
+    ruta: intranet/apache2.conf
+    exposicion: baja
+    alcance: bajo
+
+  - nombre: vpn-sedes
+    tipo: vpn
+    ruta:
+      - vpn/ipsec.conf
+      - vpn/wg0.conf
+    exposicion: alta
+    alcance: alto
