@@ -1,0 +1,47 @@
+name: Compliance
+
+# Auditoría de cumplimiento: ejecuta el escáner de la Fase 1 y falla si el
+# riesgo global es Crítico (misma regla del peor caso que el informe ejecutivo).
+#
+# En este repositorio audita, por diseño, el inventario de EJEMPLO
+# (ejemplos/inventario.yaml), que contiene hallazgos Urgentes a propósito:
+# este job sale en rojo para demostrar el mecanismo, no porque haya un error.
+# En un uso real, el inventario apuntaría a las configuraciones reales del
+# sistema auditado.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configurar Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements.txt
+
+      - name: Aviso sobre el inventario auditado
+        run: |
+          echo "::notice title=Inventario de ejemplo::Este job audita ejemplos/inventario.yaml, que tiene hallazgos Urgentes a propósito para demostrar el mecanismo. En un uso real apuntaría a las configuraciones del sistema auditado."
+
+      - name: Escanear (Fase 1)
+        run: python -m quantum_ready -i ejemplos/inventario.yaml -o informe.json
+
+      - name: Auditoría de cumplimiento
+        run: python -m quantum_ready.cumplimiento informe.json

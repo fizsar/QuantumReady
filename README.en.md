@@ -1,6 +1,6 @@
 # Quantum Ready
 
-[![Tests](https://github.com/fizsar/QuantumReady/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/fizsar/QuantumReady/actions/workflows/tests.yml)
+[![Tests](https://github.com/fizsar/QuantumReady/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/fizsar/QuantumReady/actions/workflows/tests.yml) [![Compliance](https://github.com/fizsar/QuantumReady/actions/workflows/compliance.yml/badge.svg?branch=main)](https://github.com/fizsar/QuantumReady/actions/workflows/compliance.yml)
 
 [Español](README.md) · **English**
 
@@ -49,6 +49,9 @@ python -m quantum_ready.red -o resultados_overhead.referencia.json
 # Phase 4 — executive PDF report
 python -m quantum_ready.informe --idioma en
 python -m quantum_ready.informe --idioma es --empresa ejemplos/empresa.yaml
+
+# Compliance audit: fails (exit code 1) if the overall risk is Critical
+python -m quantum_ready.cumplimiento informe.json
 
 # Tests
 python -m pytest
