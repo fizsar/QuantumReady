@@ -22,9 +22,6 @@ jobs:
   compliance:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # El resultado de la auditoría se informa, pero no hace fallar la
-    # ejecución del workflow (ver el comentario de cabecera).
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v5
