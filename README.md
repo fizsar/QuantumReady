@@ -65,7 +65,13 @@ Resumen ejecutivo del PDF generado con las configuraciones de ejemplo:
 
 ![Resumen ejecutivo del informe en PDF](docs/img/resumen_es.png)
 
-## Fase 5 (en curso) — Gateway TLS híbrido
+## Fase 5 — Gateway TLS híbrido (hito de mecanismo completo)
+
+**Estado:** hito de mecanismo completo y desplegable de forma reproducible:
+cualquiera puede levantarlo desde cero y verificarlo siguiendo la
+[guía de despliegue](docs/gateway-despliegue.md), no solo en la máquina donde
+se desarrolló. No es equivalente en alcance a las Fases 1-4: sigue siendo una
+demo de gateway, no un producto de gestión de certificados.
 
 Un proxy que termina TLS 1.3 aceptando **solo** el intercambio híbrido
 X25519MLKEM768 y reenvía las peticiones a un backend HTTP sin TLS, sin tocar
@@ -98,6 +104,7 @@ Robustez operativa, hecha y verificada con mediciones reales:
 **Requisitos:** Linux con Python 3.14+ y OpenSSL 3.5+ (probado en Ubuntu 26.04
 sobre WSL2). **No funciona con el Python de Windows** del resto del proyecto,
 que usa OpenSSL 3.0. Sus tests de integración se saltan en Windows y en CI.
+Pasos completos, requisitos verificados y qué ocurre si no se cumplen: [docs/gateway-despliegue.md](docs/gateway-despliegue.md).
 
 ```bash
 python3 -m quantum_ready.gateway.backend_prueba &    # HTTP sin TLS en :8080
@@ -124,7 +131,7 @@ quantum_ready/
 ├── tunel/                              Fase 2: cliente, servidor y atacante
 ├── red/                                Fase 3: sockets TCP con latencia inyectada
 ├── informe/                            Fase 4: PDF y traducciones es/en
-└── gateway/                            Fase 5 (en curso): proxy TLS híbrido
+└── gateway/                            Fase 5: gateway TLS híbrido (demo)
 ejemplos/                               configuraciones, inventario y empresa de ejemplo
 tests/                                  tests de las 4 fases
 docs/                                   documentación detallada por fase
@@ -133,7 +140,7 @@ resultados_overhead.referencia.json     medición de referencia de la Fase 3
 
 ## Estado
 
-**4 fases completas y la 5.ª en curso · 453 tests (pytest; 13 de ellos solo en Linux con OpenSSL 3.5+) · probado en Windows con Python 3.13 y en Ubuntu 26.04 (WSL2) con Python 3.14.**
+**4 fases completas y la Fase 5 como hito de mecanismo completo (demo de gateway) · 453 tests (pytest; 13 de ellos solo en Linux con OpenSSL 3.5+) · probado en Windows con Python 3.13 y en Ubuntu 26.04 (WSL2) con Python 3.14.**
 
 ## Decisiones técnicas destacadas
 
@@ -160,6 +167,7 @@ resultados_overhead.referencia.json     medición de referencia de la Fase 3
 
 - [Documentación detallada por fase](docs/fases.md): formatos, libro de reglas,
   modelo de riesgo, metodología del benchmark y estructura del informe.
+- [Despliegue reproducible del gateway (Fase 5)](docs/gateway-despliegue.md).
 - [Convenciones de desarrollo y lecciones del proyecto](CONTRIBUTING.md).
 
 ## De prueba de concepto a arquitectura de producto

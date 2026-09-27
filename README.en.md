@@ -66,7 +66,13 @@ Executive summary of the PDF generated from the example configurations:
 
 ![Executive summary of the PDF report](docs/img/resumen_en.png)
 
-## Phase 5 (in progress) — Hybrid TLS gateway
+## Phase 5 — Hybrid TLS gateway (mechanism milestone complete)
+
+**Status:** mechanism milestone complete and reproducibly deployable: anyone
+can bring it up from scratch and verify it by following the
+[deployment guide](docs/gateway-deployment.md), not only on the machine where
+it was developed. It is not equivalent in scope to Phases 1-4: it is still a
+gateway demo, not a certificate-management product.
 
 A proxy that terminates TLS 1.3 accepting **only** the X25519MLKEM768 hybrid
 key exchange and forwards requests to an HTTP backend without TLS, without
@@ -99,7 +105,8 @@ Operational robustness, done and verified with real measurements:
 **Requirements:** Linux with Python 3.14+ and OpenSSL 3.5+ (tested on Ubuntu
 26.04 under WSL2). **It does not work with the Windows Python** used by the
 rest of the project, which ships OpenSSL 3.0. Its integration tests are
-skipped on Windows and in CI.
+skipped on Windows and in CI. Full steps, verified requirements and what
+happens if they are not met: [docs/gateway-deployment.md](docs/gateway-deployment.md).
 
 ```bash
 python3 -m quantum_ready.gateway.backend_prueba &    # HTTP without TLS on :8080
@@ -126,7 +133,7 @@ quantum_ready/
 ├── tunel/                              Phase 2: client, server and attacker
 ├── red/                                Phase 3: TCP sockets with injected latency
 ├── informe/                            Phase 4: PDF and es/en translations
-└── gateway/                            Phase 5 (in progress): hybrid TLS proxy
+└── gateway/                            Phase 5: hybrid TLS gateway (demo)
 ejemplos/                               example configurations, inventory and company
 tests/                                  tests for the 4 phases
 docs/                                   detailed documentation by phase
@@ -135,7 +142,7 @@ resultados_overhead.referencia.json     Phase 3 reference measurement
 
 ## Status
 
-**4 phases complete and the 5th in progress · 453 tests (pytest; 13 of them Linux-only with OpenSSL 3.5+) · tested on Windows with Python 3.13 and on Ubuntu 26.04 (WSL2) with Python 3.14.**
+**4 phases complete and Phase 5 as a completed mechanism milestone (gateway demo) · 453 tests (pytest; 13 of them Linux-only with OpenSSL 3.5+) · tested on Windows with Python 3.13 and on Ubuntu 26.04 (WSL2) with Python 3.14.**
 
 ## Notable technical decisions
 
@@ -163,6 +170,7 @@ resultados_overhead.referencia.json     Phase 3 reference measurement
 
 - [Detailed documentation by phase](docs/phases.md): formats, rulebook, risk
   model, benchmark methodology and report structure.
+- [Reproducible deployment of the gateway (Phase 5)](docs/gateway-deployment.md).
 - [Development conventions and project lessons](CONTRIBUTING.en.md).
 
 ## From proof of concept to product architecture
