@@ -6,7 +6,9 @@ backend y el proxy de verdad y solo se ejecutan en Linux con OpenSSL >= 3.5
 """
 
 import ast
+import asyncio
 import json
+import os
 import re
 import shutil
 import socket
@@ -18,8 +20,11 @@ from pathlib import Path
 import pytest
 
 from quantum_ready.gateway import conf_openssl
-from quantum_ready.gateway.backend_prueba import RESPUESTA
-from quantum_ready.gateway.reenvio import forzar_cierre, longitud_cuerpo
+from quantum_ready.gateway.backend_prueba import RESPUESTA, TAMANO_GRANDE, Backend
+from quantum_ready.gateway.reenvio import (ErrorHTTP, Limites, forzar_cierre,
+                                           leer_peticion, longitud_cuerpo,
+                                           prefijo_valido, reenviar, respuesta_error,
+                                           validar_cabecera)
 from quantum_ready.gateway.s_client import ResultadoSClient
 from quantum_ready.gateway.verificar import json_de
 
@@ -194,6 +199,161 @@ def test_json_de_corta_por_content_length():
     assert json_de(respuesta) == RESPUESTA
 
 
+# --- Robustez del reenvío, sin TLS (cualquier sistema, también CI) ----------------------
+@pytest.mark.parametrize("datos, valido", [
+    (b"", True),
+    (b"GE", True),
+    (b"GET /ruta HT", True),
+    (b"GET / HTTP/1.1\r\nHost: x", True),
+    (b"get / HTTP/1.1", False),          # método en minúsculas
+    (b" / HTTP/1.1", False),             # sin método
+    (b"GET / FTP/1.0\r\n", False),      # línea completa pero no HTTP
+    (b"\x16\x03\x01\x02\x00", False),     # un ClientHello TLS no es HTTP
+    (os.urandom(64) + b"\x00", False),   # bytes aleatorios
+], ids=["vacio", "metodo-a-medias", "linea-a-medias", "cabecera-a-medias", "minusculas",
+        "sin-metodo", "no-http", "clienthello-tls", "aleatorio"])
+def test_prefijo_valido(datos, valido):
+    assert prefijo_valido(datos) is valido
+
+
+@pytest.mark.parametrize("cabecera, codigo", [
+    (b"GET / HTTP/1.1\r\nContent-Length: abc\r\n\r\n", 400),
+    (b"GET / HTTP/1.1\r\nsin dos puntos\r\n\r\n", 400),
+    (b"GET / HTTP/1.1\r\nContent-Length: 999999999\r\n\r\n", 413),
+])
+def test_validar_cabecera_rechaza(cabecera, codigo):
+    with pytest.raises(ErrorHTTP) as e:
+        validar_cabecera(cabecera, Limites())
+    assert e.value.codigo == codigo
+
+
+def test_respuesta_error_es_http_valido():
+    r = respuesta_error(502, "backend no disponible")
+    cabecera, cuerpo = r.split(b"\r\n\r\n", 1)
+    assert cabecera.startswith(b"HTTP/1.1 502 Bad Gateway")
+    assert f"Content-Length: {len(cuerpo)}".encode() in cabecera
+    assert json.loads(cuerpo) == {"error": "Bad Gateway", "detalle": "backend no disponible"}
+
+
+def _leer(datos: bytes, eof: bool = True, timeout: float = 5):
+    async def principal():
+        lector = asyncio.StreamReader()
+        lector.feed_data(datos)
+        if eof:
+            lector.feed_eof()
+        return await leer_peticion(lector, Limites(timeout_s=timeout))
+    return asyncio.run(principal())
+
+
+def test_leer_peticion_con_cuerpo():
+    cabecera, cuerpo = _leer(b"POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\nholaEXTRA")
+    assert cabecera.startswith(b"POST /x") and cuerpo == b"holaE"  # 5 bytes
+
+
+@pytest.mark.parametrize("datos, eof, codigo", [
+    (os.urandom(512) + b"\x00", True, 400),                  # basura: 400 al momento
+    (b"GET /" + b"a" * 70_000, True, 431),                    # cabecera enorme
+    (b"GET / HTTP/1.1\r\nHost: x", False, 408),              # nunca termina
+], ids=["basura-400", "cabecera-enorme-431", "incompleta-408"])
+def test_leer_peticion_errores(datos, eof, codigo):
+    with pytest.raises(ErrorHTTP) as e:
+        _leer(datos, eof=eof, timeout=0.1)
+    assert e.value.codigo == codigo
+
+
+def test_leer_peticion_cliente_cierra_antes_de_terminar():
+    with pytest.raises(ConnectionResetError):
+        _leer(b"GET / HTTP/1.1\r\n")
+
+
+async def _pila(limites: Limites, backend_activo: bool = True):
+    """Backend de prueba + reenvío, en el mismo bucle y sin TLS."""
+    backend = Backend()
+    srv_backend = await asyncio.start_server(backend.atender, "127.0.0.1", 0)
+    puerto_backend = srv_backend.sockets[0].getsockname()[1]
+    if not backend_activo:  # puerto que existió y ya no escucha: backend caído
+        srv_backend.close()
+        await srv_backend.wait_closed()
+    srv_proxy = await asyncio.start_server(
+        lambda r, w: reenviar(r, w, ("127.0.0.1", puerto_backend), limites), "127.0.0.1", 0)
+    return backend, srv_backend, srv_proxy, srv_proxy.sockets[0].getsockname()[1]
+
+
+async def _get(puerto: int, datos: bytes) -> bytes:
+    lector, escritor = await asyncio.open_connection("127.0.0.1", puerto)
+    escritor.write(datos)
+    await escritor.drain()
+    respuesta = await lector.read()
+    escritor.close()
+    return respuesta
+
+
+def _peticion(ruta: str) -> bytes:
+    return f"GET {ruta} HTTP/1.1\r\nHost: x\r\n\r\n".encode()
+
+
+def _codigo(respuesta: bytes) -> int:
+    return int(respuesta.split(b" ", 2)[1])
+
+
+def test_backend_caido_da_502():
+    async def principal():
+        _, _, proxy, puerto = await _pila(Limites(), backend_activo=False)
+        async with proxy:
+            return await _get(puerto, _peticion("/"))
+    respuesta = asyncio.run(principal())
+    assert _codigo(respuesta) == 502
+    assert b"backend no disponible" in respuesta
+
+
+def test_backend_lento_da_504():
+    async def principal():
+        _, backend, proxy, puerto = await _pila(Limites(timeout_s=0.1))
+        async with backend, proxy:
+            return await _get(puerto, _peticion("/lento"))
+    assert _codigo(asyncio.run(principal())) == 504
+
+
+def test_basura_da_400_sin_esperar():
+    async def principal():
+        _, backend, proxy, puerto = await _pila(Limites(timeout_s=5))
+        async with backend, proxy:
+            return await asyncio.wait_for(_get(puerto, os.urandom(512) + b"\x00"), 1)
+    assert _codigo(asyncio.run(principal())) == 400
+
+
+def test_cliente_que_corta_no_deja_conexiones_con_el_backend():
+    async def principal():
+        estado, backend, proxy, puerto = await _pila(Limites())
+        async with backend, proxy:
+            lector, escritor = await asyncio.open_connection("127.0.0.1", puerto)
+            escritor.write(_peticion("/grande"))
+            await lector.readexactly(100_000)
+            escritor.transport.abort()  # corte brusco a mitad de la respuesta
+            for _ in range(50):
+                await asyncio.sleep(0.05)
+                if estado.conexiones_abiertas == 0:
+                    break
+            despues = await _get(puerto, _peticion("/"))
+            return estado.conexiones_abiertas, despues
+    abiertas, despues = asyncio.run(principal())
+    assert abiertas == 0
+    assert _codigo(despues) == 200
+
+
+def test_peticiones_lentas_no_bloquean_a_las_demas():
+    async def principal():
+        _, backend, proxy, puerto = await _pila(Limites())
+        async with backend, proxy:
+            inicio = asyncio.get_running_loop().time()
+            respuestas = await asyncio.gather(*(_get(puerto, _peticion("/lento" if i % 2 else "/"))
+                                                for i in range(20)))
+            return asyncio.get_running_loop().time() - inicio, respuestas
+    total, respuestas = asyncio.run(principal())
+    assert all(_codigo(r) == 200 for r in respuestas)
+    assert total < 2  # en secuencia serían al menos 10 x 0,5 s = 5 s
+
+
 # --- Integración: backend + proxy reales ----------------------------------------------------
 def _openssl_35() -> bool:
     if sys.platform != "linux" or not shutil.which("openssl"):
@@ -232,36 +392,63 @@ def _esperar_listo(proceso: subprocess.Popen, tiempo: float = 30) -> str:
     return "".join(salida)
 
 
-@pytest.fixture
-def gateway(tmp_path, monkeypatch):
-    """Arranca backend y proxy; devuelve una función para lanzar más proxies."""
-    import os
-    monkeypatch.setenv("QR_GATEWAY_DIR", str(tmp_path))
-    base_env = {k: v for k, v in os.environ.items() if k != "OPENSSL_CONF"}
-    procesos = []
-    puerto_backend = _puerto_libre()
-    procesos.append(_lanzar("quantum_ready.gateway.backend_prueba", "--puerto",
-                            str(puerto_backend), env=base_env))
+class Pila:
+    """Backend y proxies reales lanzados como procesos."""
 
-    def arrancar_proxy(**extra_env):
+    def __init__(self, base_env: dict):
+        self.base_env = base_env
+        self.procesos: list[subprocess.Popen] = []
+        self.puerto_backend = _puerto_libre()
+        self.backend = _lanzar("quantum_ready.gateway.backend_prueba", "--puerto",
+                               str(self.puerto_backend), env=base_env)
+        self.procesos.append(self.backend)
+        time.sleep(0.5)  # el backend arranca en milisegundos
+
+    def arrancar_proxy(self, *opciones: str, **extra_env):
         puerto = _puerto_libre()
         proceso = _lanzar("quantum_ready.gateway.proxy", "--puerto", str(puerto),
-                          "--backend", f"127.0.0.1:{puerto_backend}",
-                          env={**base_env, **extra_env})
-        procesos.append(proceso)
+                          "--backend", f"127.0.0.1:{self.puerto_backend}", *opciones,
+                          env={**self.base_env, **extra_env})
+        self.procesos.append(proceso)
         return puerto, proceso, _esperar_listo(proceso)
 
-    time.sleep(0.5)  # el backend arranca en milisegundos
-    yield arrancar_proxy
-    for p in procesos:
-        p.terminate()
-        p.wait(timeout=10)
+    def detener_backend(self) -> None:
+        self.backend.terminate()
+        self.backend.wait(timeout=10)
+
+    def cerrar(self) -> None:
+        for p in self.procesos:
+            if p.poll() is None:
+                p.terminate()
+                p.wait(timeout=10)
+
+
+@pytest.fixture
+def gateway(tmp_path, monkeypatch):
+    monkeypatch.setenv("QR_GATEWAY_DIR", str(tmp_path))
+    pila = Pila({k: v for k, v in os.environ.items() if k != "OPENSSL_CONF"})
+    yield pila
+    pila.cerrar()
+
+
+def _tls(puerto: int):
+    import ssl
+    from quantum_ready.gateway.carga import contexto_cliente
+    s = socket.create_connection(("127.0.0.1", puerto), timeout=30)
+    return contexto_cliente().wrap_socket(s, server_hostname="localhost")
+
+
+def _recibir_todo(s) -> bytes:
+    datos = b""
+    while trozo := s.recv(65536):
+        datos += trozo
+    return datos
 
 
 @integracion
 def test_extremo_a_extremo_con_x25519mlkem768(gateway):
     from quantum_ready.gateway.verificar import verificar
-    puerto, _, arranque = gateway()
+    puerto, _, arranque = gateway.arrancar_proxy()
     assert "LISTO" in arranque, arranque
     assert "grupos solo clásicos: rechazado" in arranque
     assert "bajar a TLS 1.2: rechazado" in arranque
@@ -277,7 +464,7 @@ def test_extremo_a_extremo_con_x25519mlkem768(gateway):
                                       ("-tls1_2",)])
 def test_rechaza_clientes_clasicos(gateway, opciones):
     from quantum_ready.gateway.s_client import ejecutar
-    puerto, _, _ = gateway()
+    puerto, _, _ = gateway.arrancar_proxy()
     r = ejecutar("127.0.0.1", puerto, *opciones)
     assert r.rechazado_por_el_servidor, r.describir()
 
@@ -285,7 +472,7 @@ def test_rechaza_clientes_clasicos(gateway, opciones):
 @integracion
 def test_se_niega_a_arrancar_si_acepta_grupos_clasicos(gateway):
     """Si la configuración admitiera X25519, el autotest lo detecta y no arranca."""
-    _, proceso, salida = gateway(QR_GATEWAY_GRUPOS="X25519MLKEM768:X25519")
+    _, proceso, salida = gateway.arrancar_proxy(QR_GATEWAY_GRUPOS="X25519MLKEM768:X25519")
     assert proceso.wait(timeout=30) == 1
     assert "LISTO" not in salida
     assert "grupos solo clásicos: ACEPTADO" in salida
@@ -299,8 +486,180 @@ def test_incluye_la_configuracion_del_sistema(gateway, tmp_path):
     sistema = _escribir(tmp_path / "sistema.cnf", (
         "openssl_conf = ini\n[ini]\nssl_conf = s\n[s]\nsystem_default = tls\n"
         "[tls]\nCiphersuites = TLS_CHACHA20_POLY1305_SHA256\n"))
-    puerto, _, arranque = gateway(OPENSSL_CONF=str(sistema))
+    puerto, _, arranque = gateway.arrancar_proxy(OPENSSL_CONF=str(sistema))
     assert "LISTO" in arranque, arranque
     r = ejecutar("127.0.0.1", puerto, "-groups", "X25519MLKEM768")
     assert r.grupo_negociado == "X25519MLKEM768"
     assert r.cifrado == "TLS_CHACHA20_POLY1305_SHA256"
+
+
+@integracion
+def test_carga_30_clientes_tls_concurrentes(gateway):
+    from quantum_ready.gateway.carga import concurrente
+    puerto, _, arranque = gateway.arrancar_proxy()
+    assert "LISTO" in arranque, arranque
+    total, resultados = asyncio.run(concurrente("127.0.0.1", puerto, 30))
+    assert all(r.estado == 200 for r in resultados), [r.error for r in resultados]
+    assert total < 2.5  # en secuencia serían al menos 15 x 0,5 s = 7,5 s
+
+
+@integracion
+def test_tls_backend_apagado_da_502(gateway):
+    puerto, _, _ = gateway.arrancar_proxy()
+    gateway.detener_backend()
+    with _tls(puerto) as s:
+        s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+        respuesta = _recibir_todo(s)
+    assert respuesta.startswith(b"HTTP/1.1 502 Bad Gateway")
+
+
+@integracion
+def test_tls_cliente_corta_a_mitad(gateway):
+    import urllib.request
+    puerto, proceso, _ = gateway.arrancar_proxy()
+    with _tls(puerto) as s:
+        s.sendall(b"GET /grande HTTP/1.1\r\nHost: x\r\n\r\n")
+        recibidos = 0
+        while recibidos < 100_000:
+            recibidos += len(s.recv(65536))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01" + b"\x00" * 7)  # RST
+    url = f"http://127.0.0.1:{gateway.puerto_backend}/estado"
+    for _ in range(50):
+        time.sleep(0.1)
+        with urllib.request.urlopen(url) as r:
+            abiertas = json.load(r)["conexiones_abiertas"]
+        if abiertas == 0:
+            break
+    assert recibidos < TAMANO_GRANDE and abiertas == 0
+    assert proceso.poll() is None
+    with _tls(puerto) as s:
+        s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+        assert _recibir_todo(s).startswith(b"HTTP/1.1 200")
+
+
+@integracion
+def test_tls_peticion_malformada(gateway):
+    puerto, proceso, _ = gateway.arrancar_proxy()
+    inicio = time.monotonic()
+    with _tls(puerto) as s:
+        s.sendall(os.urandom(512) + b"\x00")
+        respuesta = _recibir_todo(s)
+    assert respuesta.startswith(b"HTTP/1.1 400 Bad Request")
+    assert time.monotonic() - inicio < 2  # no espera al timeout de 10 s
+    with socket.create_connection(("127.0.0.1", puerto), timeout=5) as s:
+        s.sendall(os.urandom(512))  # ni siquiera es TLS
+        try:
+            _recibir_todo(s)  # el proxy cierra la conexión
+        except ConnectionResetError:
+            pass
+    assert proceso.poll() is None
+
+
+@integracion
+def test_tls_timeouts_de_cliente(gateway):
+    puerto, _, _ = gateway.arrancar_proxy("--timeout", "1")
+    with _tls(puerto) as s:
+        s.sendall(b"GET / HTTP/1.1\r\nHost: x")  # cabecera sin terminar
+        assert _recibir_todo(s).startswith(b"HTTP/1.1 408 Request Timeout")
+    inicio = time.monotonic()
+    with socket.create_connection(("127.0.0.1", puerto), timeout=30) as s:
+        _recibir_todo(s)  # TCP abierto sin handshake: el proxy lo cierra
+    assert time.monotonic() - inicio < 5
+
+
+
+# --- Registro de los handshakes rechazados -------------------------------------------------
+from quantum_ready.gateway import handshake  # noqa: E402
+
+
+def _error_ssl(reason: str):
+    import ssl
+    e = ssl.SSLError(1, "fallo simulado")
+    e.reason = reason
+    return e
+
+
+@pytest.mark.parametrize("error, texto", [
+    (lambda: _error_ssl("NO_SUITABLE_KEY_SHARE"), "no ofrece X25519MLKEM768"),
+    (lambda: _error_ssl("UNSUPPORTED_PROTOCOL"), "se exige TLS 1.3"),
+    (lambda: _error_ssl("RECORD_LAYER_FAILURE"), "no es TLS válido"),
+    (lambda: _error_ssl("HTTP_REQUEST"), "HTTP en claro"),
+    (lambda: _error_ssl("CODIGO_NUEVO"), "error TLS [CODIGO_NUEVO]"),
+    (lambda: ConnectionAbortedError("SSL handshake is taking longer than 1.0 seconds"),
+     "no se completó a tiempo"),
+    (lambda: TimeoutError(), "no se completó a tiempo"),
+    (lambda: ConnectionResetError(), "cerró la conexión durante el handshake"),
+], ids=["clasico", "tls12", "basura", "http", "desconocido", "abortado", "timeout", "reset"])
+def test_describir_rechazo(error, texto):
+    assert texto in handshake.describir_rechazo(error())
+
+
+def test_filtro_solo_quita_el_aviso_de_eof():
+    import logging
+    def registro(mensaje):
+        return logging.LogRecord("asyncio", logging.WARNING, "", 0, mensaje, None, None)
+    filtro = handshake._SinAvisoEofSsl()
+    assert not filtro.filter(registro("returning true from eof_received() has no effect when using ssl"))
+    assert filtro.filter(registro("otro aviso de asyncio"))
+
+
+def test_handshake_rechazado_queda_registrado(tmp_path, capsys):
+    """Con TLS clásico (vale en cualquier OpenSSL): TLS 1.2 y basura se registran."""
+    import ssl
+    from quantum_ready.gateway import certificado
+    cert, clave = certificado.asegurar(tmp_path)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.load_cert_chain(cert, clave)
+    cliente_12 = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    cliente_12.check_hostname, cliente_12.verify_mode = False, ssl.CERT_NONE
+    cliente_12.maximum_version = ssl.TLSVersion.TLSv1_2
+
+    async def principal():
+        atendidas = []
+
+        async def manejador(lector, escritor):
+            atendidas.append(escritor.get_extra_info("ssl_object").version())
+            escritor.close()
+
+        srv = await handshake.servidor(ctx, "127.0.0.1", 0, 5, manejador)
+        puerto = srv.sockets[0].getsockname()[1]
+        async with srv:
+            with pytest.raises((ssl.SSLError, ConnectionError)):
+                await asyncio.open_connection("127.0.0.1", puerto, ssl=cliente_12)
+            _, escritor = await asyncio.open_connection("127.0.0.1", puerto)
+            escritor.write(os.urandom(300))
+            await escritor.drain()
+            await asyncio.sleep(0.5)
+            escritor.close()
+        return atendidas
+
+    assert asyncio.run(principal()) == []  # ninguna llegó al manejador
+    log = capsys.readouterr().out
+    assert log.count("HANDSHAKE RECHAZADO") == 2
+    assert "(se exige TLS 1.3) [UNSUPPORTED_PROTOCOL]" in log
+    assert "no es TLS válido" in log  # RECORD_LAYER_FAILURE o WRONG_VERSION_NUMBER
+
+
+@integracion
+def test_tls_rechazos_quedan_en_el_log_del_proxy(gateway):
+    from quantum_ready.gateway.s_client import ejecutar
+    puerto, proceso, _ = gateway.arrancar_proxy()
+    ejecutar("127.0.0.1", puerto, "-groups", "X25519")
+    ejecutar("127.0.0.1", puerto, "-tls1_2")
+    for datos in (os.urandom(300), b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"):
+        with socket.create_connection(("127.0.0.1", puerto), timeout=5) as s:
+            s.sendall(datos)
+            try:
+                s.recv(10)
+            except ConnectionResetError:
+                pass
+    time.sleep(0.5)
+    proceso.terminate()
+    log = proceso.communicate(timeout=10)[0]
+    rechazos = [ln for ln in log.splitlines() if ln.startswith("[proxy] HANDSHAKE RECHAZADO")]
+    assert len(rechazos) == 4, log
+    assert "[NO_SUITABLE_KEY_SHARE]" in rechazos[0]
+    assert "[UNSUPPORTED_PROTOCOL]" in rechazos[1]
+    assert "no es TLS válido" in rechazos[2]
+    assert "[HTTP_REQUEST]" in rechazos[3]

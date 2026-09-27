@@ -68,10 +68,9 @@ Executive summary of the PDF generated from the example configurations:
 
 ## Phase 5 (in progress) — Hybrid TLS gateway
 
-First milestone: a proxy that terminates TLS 1.3 accepting **only** the
-X25519MLKEM768 hybrid key exchange and forwards requests to an HTTP backend
-without TLS, without touching that backend
-([quantum_ready/gateway/](quantum_ready/gateway/)).
+A proxy that terminates TLS 1.3 accepting **only** the X25519MLKEM768 hybrid
+key exchange and forwards requests to an HTTP backend without TLS, without
+touching that backend ([quantum_ready/gateway/](quantum_ready/gateway/)).
 
 - **Enforced:** Python 3.14's `ssl` module cannot set the group, so the proxy
   sets `OPENSSL_CONF` before OpenSSL is loaded, with a file that includes the
@@ -83,6 +82,19 @@ without TLS, without touching that backend
   the proxy log shows it as *enforced by configuration*. `verificar.py` checks
   it on a real connection with `s_client` (`Negotiated TLS1.3 group:
   X25519MLKEM768`) and validates the backend's JSON.
+- **Rejections logged:** every rejected handshake is logged with its reason,
+  taken from the OpenSSL error code: classical-only client, TLS 1.2, bytes that
+  are not TLS, plain HTTP, timeout or a client that drops the connection.
+
+Operational robustness, done and verified with real measurements:
+
+| Test | Result |
+|---|---|
+| 30 simultaneous TLS clients (15 to a route that takes 0.5 s) | 0.56 s versus 7.67 s sequentially: **13.7 times** faster |
+| Backend down | `502 Bad Gateway` |
+| Client drops the connection mid-response | the proxy keeps serving and no connection to the backend is left open |
+| Malformed request (random bytes) | `400 Bad Request` in 7 ms, without waiting for the timeout |
+| Timeouts (`--timeout`, 10 s by default) | incomplete header → `408`, slow backend → `504`, TCP without handshake → closed |
 
 **Requirements:** Linux with Python 3.14+ and OpenSSL 3.5+ (tested on Ubuntu
 26.04 under WSL2). **It does not work with the Windows Python** used by the
@@ -93,11 +105,11 @@ skipped on Windows and in CI.
 python3 -m quantum_ready.gateway.backend_prueba &    # HTTP without TLS on :8080
 python3 -m quantum_ready.gateway.proxy &             # hybrid TLS on :8443
 python3 -m quantum_ready.gateway.verificar
+python3 -m quantum_ready.gateway.carga               # 30 simultaneous clients
 ```
 
-**Work in progress:** the full proxy (robust concurrency, error handling, a
-more realistic backend) is still to be done; this milestone only demonstrates
-the mechanism end to end.
+**To do:** a more realistic test backend than the current one, which only
+returns fixed responses (`/`, `/lento`, `/grande`).
 
 ## Project structure
 
@@ -117,7 +129,7 @@ resultados_overhead.referencia.json     Phase 3 reference measurement
 
 ## Status
 
-**4 phases complete and the 5th in progress · 398 tests (pytest; 6 of them Linux-only with OpenSSL 3.5+) · tested on Windows with Python 3.13 and on Ubuntu 26.04 (WSL2) with Python 3.14.**
+**4 phases complete and the 5th in progress · 437 tests (pytest; 12 of them Linux-only with OpenSSL 3.5+) · tested on Windows with Python 3.13 and on Ubuntu 26.04 (WSL2) with Python 3.14.**
 
 ## Notable technical decisions
 

@@ -29,10 +29,9 @@ import asyncio  # noqa: E402
 import ssl  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 
-from quantum_ready.gateway import certificado, s_client  # noqa: E402
-from quantum_ready.gateway.reenvio import GRUPO_HIBRIDO, reenviar  # noqa: E402
+from quantum_ready.gateway import certificado, handshake, s_client  # noqa: E402
+from quantum_ready.gateway.reenvio import GRUPO_HIBRIDO, Limites, reenviar  # noqa: E402
 
-TAMANO_MAXIMO_CABECERA = 64 * 1024
 
 
 class ErrorArranque(RuntimeError):
@@ -65,17 +64,19 @@ CASOS_AUTOTEST = (
 )
 
 
-async def autotest(ctx: ssl.SSLContext) -> list[str]:
+async def autotest(ctx: ssl.SSLContext, timeout_s: float = Limites.timeout_s) -> list[str]:
     """Prueba el contexto con openssl s_client antes de aceptar tráfico real.
 
     Se hace sobre un servidor temporal en un puerto efímero con el MISMO
-    contexto, así el puerto real no se abre hasta que el autotest pasa.
+    contexto y el mismo camino de handshake que el servidor real, así el
+    puerto real no se abre hasta que el autotest pasa.
     Lanza ErrorArranque si el servidor acepta algo que debería rechazar.
     """
     async def cerrar(_lector, escritor):
         escritor.close()
 
-    servidor = await asyncio.start_server(cerrar, "127.0.0.1", 0, ssl=ctx)
+    servidor = await handshake.servidor(ctx, "127.0.0.1", 0, timeout_s, cerrar,
+                                        etiqueta="autotest")
     puerto = servidor.sockets[0].getsockname()[1]
     informe, fallos = [], []
     try:
@@ -105,7 +106,8 @@ def _direccion(texto: str) -> tuple[str, int]:
     return host or "127.0.0.1", int(puerto)
 
 
-async def arrancar(host: str, puerto: int, backend: tuple[str, int]) -> None:
+async def arrancar(host: str, puerto: int, backend: tuple[str, int],
+                   limites: Limites) -> None:
     if ssl.OPENSSL_VERSION_INFO < (3, 5):
         raise ErrorArranque(f"El módulo ssl usa {ssl.OPENSSL_VERSION}; X25519MLKEM768 "
                             "requiere OpenSSL 3.5 o posterior.")
@@ -114,15 +116,17 @@ async def arrancar(host: str, puerto: int, backend: tuple[str, int]) -> None:
     print(f"[proxy] {ssl.OPENSSL_VERSION} · OPENSSL_CONF={os.environ['OPENSSL_CONF']}")
     print("[proxy] Autotest de seguridad:")
     try:
-        informe = await autotest(ctx)
+        informe = await autotest(ctx, limites.timeout_s)
     except FileNotFoundError:
         raise ErrorArranque("No se encuentra el comando openssl, necesario para "
                             "verificar el grupo negociado.") from None
     print("\n".join(informe))
 
-    servidor = await asyncio.start_server(
-        lambda r, w: reenviar(r, w, backend), host, puerto, ssl=ctx,
-        limit=TAMANO_MAXIMO_CABECERA)
+    # El handshake se hace en handshake.atender (mismo contexto TLS) para poder
+    # registrar los rechazos; tiene timeout, igual que el cierre TLS.
+    servidor = await handshake.servidor(
+        ctx, host, puerto, limites.timeout_s,
+        lambda r, w: reenviar(r, w, backend, limites))
     print(f"[proxy] escuchando en https://{host}:{puerto} -> http://{backend[0]}:{backend[1]}"
           f" (solo {GRUPO_HIBRIDO}, TLS 1.3)")
     print("LISTO", flush=True)
@@ -138,11 +142,15 @@ def main(argv: list[str] | None = None) -> int:
                                             "X25519MLKEM768 hacia un backend HTTP.")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--puerto", type=int, default=8443)
+    p.add_argument("--timeout", type=float, default=Limites.timeout_s,
+                   help="Segundos para el handshake, la petición del cliente y cada "
+                        "respuesta del backend (por defecto %(default)s).")
     p.add_argument("--backend", type=_direccion, default=("127.0.0.1", 8080),
                    help="host:puerto del backend HTTP sin TLS (por defecto 127.0.0.1:8080)")
     args = p.parse_args(argv)
     try:
-        asyncio.run(arrancar(args.host, args.puerto, args.backend))
+        asyncio.run(arrancar(args.host, args.puerto, args.backend,
+                             Limites(timeout_s=args.timeout)))
     except ErrorArranque as e:
         print(f"[proxy] ERROR:\n{e}", file=sys.stderr, flush=True)
         return 1
