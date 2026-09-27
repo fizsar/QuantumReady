@@ -66,6 +66,39 @@ Executive summary of the PDF generated from the example configurations:
 
 ![Executive summary of the PDF report](docs/img/resumen_en.png)
 
+## Phase 5 (in progress) — Hybrid TLS gateway
+
+First milestone: a proxy that terminates TLS 1.3 accepting **only** the
+X25519MLKEM768 hybrid key exchange and forwards requests to an HTTP backend
+without TLS, without touching that backend
+([quantum_ready/gateway/](quantum_ready/gateway/)).
+
+- **Enforced:** Python 3.14's `ssl` module cannot set the group, so the proxy
+  sets `OPENSSL_CONF` before OpenSSL is loaded, with a file that includes the
+  system configuration and adds `Groups = X25519MLKEM768`.
+- **Checked at startup:** with `openssl s_client`, the hybrid client must
+  connect and clients offering only classical groups or downgrading to TLS 1.2
+  must be rejected; otherwise the proxy refuses to start.
+- **Verified from outside:** Python 3.14 cannot read the negotiated group, so
+  the proxy log shows it as *enforced by configuration*. `verificar.py` checks
+  it on a real connection with `s_client` (`Negotiated TLS1.3 group:
+  X25519MLKEM768`) and validates the backend's JSON.
+
+**Requirements:** Linux with Python 3.14+ and OpenSSL 3.5+ (tested on Ubuntu
+26.04 under WSL2). **It does not work with the Windows Python** used by the
+rest of the project, which ships OpenSSL 3.0. Its integration tests are
+skipped on Windows and in CI.
+
+```bash
+python3 -m quantum_ready.gateway.backend_prueba &    # HTTP without TLS on :8080
+python3 -m quantum_ready.gateway.proxy &             # hybrid TLS on :8443
+python3 -m quantum_ready.gateway.verificar
+```
+
+**Work in progress:** the full proxy (robust concurrency, error handling, a
+more realistic backend) is still to be done; this milestone only demonstrates
+the mechanism end to end.
+
 ## Project structure
 
 ```
@@ -74,7 +107,8 @@ quantum_ready/
 ├── parsers/                            SSH, nginx, Apache, IPsec, WireGuard, certificates
 ├── tunel/                              Phase 2: client, server and attacker
 ├── red/                                Phase 3: TCP sockets with injected latency
-└── informe/                            Phase 4: PDF and es/en translations
+├── informe/                            Phase 4: PDF and es/en translations
+└── gateway/                            Phase 5 (in progress): hybrid TLS proxy
 ejemplos/                               example configurations, inventory and company
 tests/                                  tests for the 4 phases
 docs/                                   detailed documentation by phase
@@ -83,7 +117,7 @@ resultados_overhead.referencia.json     Phase 3 reference measurement
 
 ## Status
 
-**4 phases complete · 365 tests (pytest) · tested on Windows with Python 3.13.**
+**4 phases complete and the 5th in progress · 398 tests (pytest; 6 of them Linux-only with OpenSSL 3.5+) · tested on Windows with Python 3.13 and on Ubuntu 26.04 (WSL2) with Python 3.14.**
 
 ## Notable technical decisions
 
