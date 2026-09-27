@@ -663,3 +663,99 @@ def test_tls_rechazos_quedan_en_el_log_del_proxy(gateway):
     assert "[UNSUPPORTED_PROTOCOL]" in rechazos[1]
     assert "no es TLS válido" in rechazos[2]
     assert "[HTTP_REQUEST]" in rechazos[3]
+
+
+# --- Backend de prueba con datos de la Fase 1 -----------------------------------------------
+from quantum_ready.gateway.backend_prueba import cargar_datos  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def datos_escaneo(tmp_path_factory):
+    """Datos del backend sin informe.json: los genera el escáner de la Fase 1."""
+    return cargar_datos(informe=tmp_path_factory.mktemp("sin_informe") / "no_existe.json")
+
+
+def _responder(backend, ruta, metodo="GET"):
+    codigo, respuesta = asyncio.run(backend.responder(metodo, ruta))
+    cabecera, cuerpo = respuesta.split(b"\r\n\r\n", 1)
+    assert cabecera.startswith(f"HTTP/1.1 {codigo} ".encode())
+    return codigo, (json.loads(cuerpo) if b"application/json" in cabecera else cuerpo)
+
+
+def test_datos_del_escaner_si_no_hay_informe(datos_escaneo):
+    assert datos_escaneo.fuente.startswith("escaneo de inventario.yaml")
+    assert len(datos_escaneo.hallazgos) == 84  # los mismos que la Fase 1 sobre los ejemplos
+    assert set(datos_escaneo.servicios) == {"bastion-ssh", "web-publica", "intranet", "vpn-sedes"}
+
+
+def test_datos_de_informe_json_si_existe(tmp_path):
+    informe = tmp_path / "informe.json"
+    h = {"servicio": "bastion-ssh", "algoritmo": "RSA", "categoria": "critico",
+         "riesgo": {"nivel": "Urgente", "puntuacion": 16}}
+    informe.write_text(json.dumps({"generado": "2026-09-27", "hallazgos": [h]}),
+                       encoding="utf-8")
+    datos = cargar_datos(informe=informe)
+    assert datos.fuente == "informe.json (generado 2026-09-27)"
+    assert datos.hallazgos == (h,)
+
+
+@pytest.mark.parametrize("ruta", ["/", "/salud"])
+def test_backend_salud(ruta, datos_escaneo):
+    assert _responder(Backend(datos_escaneo), ruta) == (200, RESPUESTA)
+
+
+def test_backend_lista_de_hallazgos(datos_escaneo):
+    codigo, cuerpo = _responder(Backend(datos_escaneo), "/hallazgos")
+    assert codigo == 200 and cuerpo["total"] == 84 == len(cuerpo["hallazgos"])
+    primero = cuerpo["hallazgos"][0]
+    assert set(primero) == {"id", "servicio", "algoritmo", "categoria", "riesgo"}
+    assert [h["id"] for h in cuerpo["hallazgos"]] == list(range(84))
+
+
+def test_backend_detalle_de_hallazgo(datos_escaneo):
+    codigo, cuerpo = _responder(Backend(datos_escaneo), "/hallazgos/0")
+    original = datos_escaneo.hallazgos[0]
+    assert codigo == 200 and cuerpo["id"] == 0
+    assert {k: cuerpo[k] for k in original} == original  # el hallazgo completo
+    assert cuerpo["servicio_inventario"] == datos_escaneo.servicios[original["servicio"]]
+
+
+@pytest.mark.parametrize("ruta", ["/hallazgos/84", "/hallazgos/abc", "/hallazgos/-1",
+                                  "/hallazgos/", "/no-existe"])
+def test_backend_404(ruta, datos_escaneo):
+    codigo, cuerpo = _responder(Backend(datos_escaneo), ruta)
+    assert codigo == 404 and cuerpo["error"] == "Not Found"
+
+
+def test_backend_solo_lectura(datos_escaneo):
+    codigo, cuerpo = _responder(Backend(datos_escaneo), "/hallazgos", metodo="POST")
+    assert codigo == 405 and "solo GET" in cuerpo["detalle"]
+
+
+@integracion
+def test_hallazgos_detras_del_proxy_con_hibrido(gateway):
+    from quantum_ready.gateway.verificar import verificar
+    puerto, _, _ = gateway.arrancar_proxy()
+    ok, lineas = verificar("127.0.0.1", puerto, "/hallazgos")
+    assert ok, "\n".join(lineas)
+    assert "Grupo negociado: X25519MLKEM768" in lineas[0]
+    assert '"hallazgos": [{"id": 0' in lineas[1]
+
+
+@pytest.mark.parametrize("estado, ok", [("HTTP/1.1 200 OK", True),
+                                        ("HTTP/1.1 404 Not Found", False),
+                                        ("HTTP/1.1 502 Bad Gateway", False)])
+def test_verificar_solo_acepta_respuestas_2xx(monkeypatch, estado, ok):
+    from quantum_ready.gateway import verificar as modulo
+    cuerpo = json.dumps({"x": 1})
+    http = f"{estado}\r\nContent-Length: {len(cuerpo)}\r\n\r\n{cuerpo}"
+
+    def ejecutar_falso(host, puerto, *opciones, entrada=b""):
+        if "X25519MLKEM768" in opciones:
+            return ResultadoSClient(SALIDA_HIBRIDA + http)
+        return ResultadoSClient(SALIDA_RECHAZO_CIERRE)
+
+    monkeypatch.setattr(modulo, "ejecutar", ejecutar_falso)
+    resultado, lineas = modulo.verificar("127.0.0.1", 8443)
+    assert resultado is ok
+    assert lineas[1].startswith("✅" if ok else "❌")

@@ -104,12 +104,18 @@ skipped on Windows and in CI.
 ```bash
 python3 -m quantum_ready.gateway.backend_prueba &    # HTTP without TLS on :8080
 python3 -m quantum_ready.gateway.proxy &             # hybrid TLS on :8443
-python3 -m quantum_ready.gateway.verificar
+python3 -m quantum_ready.gateway.verificar --ruta /hallazgos
 python3 -m quantum_ready.gateway.carga               # 30 simultaneous clients
 ```
 
-**To do:** a more realistic test backend than the current one, which only
-returns fixed responses (`/`, `/lento`, `/grande`).
+**Test backend:** serves, read-only, the findings of the Phase 1 scanner on the
+example inventory: `/hallazgos` (summary list), `/hallazgos/{id}` (detail, 404
+if it does not exist) and `/salud` (health). It reuses Phase 1's scanner and
+inventory and takes the data from `informe.json`, or scans at startup if it
+does not exist. It keeps `/lento` and `/grande` for the load and
+connection-drop tests. It is still a **test** backend, not a production
+service: it only gives the gateway something meaningful to protect, with real
+project data.
 
 ## Project structure
 
@@ -129,7 +135,7 @@ resultados_overhead.referencia.json     Phase 3 reference measurement
 
 ## Status
 
-**4 phases complete and the 5th in progress · 437 tests (pytest; 12 of them Linux-only with OpenSSL 3.5+) · tested on Windows with Python 3.13 and on Ubuntu 26.04 (WSL2) with Python 3.14.**
+**4 phases complete and the 5th in progress · 453 tests (pytest; 13 of them Linux-only with OpenSSL 3.5+) · tested on Windows with Python 3.13 and on Ubuntu 26.04 (WSL2) with Python 3.14.**
 
 ## Notable technical decisions
 

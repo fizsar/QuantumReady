@@ -41,6 +41,14 @@ def json_de(respuesta: str | None) -> dict | None:
         return None
 
 
+def _recortar(datos: dict | None, maximo: int = 200) -> str:
+    """JSON para mostrar en una línea (la validación usa el JSON completo)."""
+    if not datos:
+        return ""
+    texto = json.dumps(datos, ensure_ascii=False)
+    return texto if len(texto) <= maximo else f"{texto[:maximo]}… ({len(texto)} caracteres)"
+
+
 def verificar(host: str, puerto: int, ruta: str = "/") -> tuple[bool, list[str]]:
     cert, _ = rutas(directorio_trabajo())
     confianza = ["-CAfile", str(cert)] if cert.exists() else []
@@ -53,19 +61,22 @@ def verificar(host: str, puerto: int, ruta: str = "/") -> tuple[bool, list[str]]
     grupo_ok = hibrida.conectado and hibrida.grupo_negociado == GRUPO_HIBRIDO
     datos = json_de(hibrida.respuesta_http)
     estado = (hibrida.respuesta_http or "").split("\r\n", 1)[0] or "(sin respuesta)"
+    # Solo una respuesta 2xx con JSON cuenta como éxito: un 404 del backend prueba
+    # que la cadena funciona, pero no que la ruta pedida responda bien.
+    respuesta_ok = datos is not None and re.match(r"HTTP/1\.[01] 2\d\d ", estado) is not None
     lineas += [
         f"{'✅' if grupo_ok else '❌'} Grupo negociado: {hibrida.grupo_negociado or '(ninguno)'}"
         f" ({hibrida.version or 'sin conexión'})"
         + (f" · clave temporal clásica: {hibrida.clave_temporal}" if hibrida.clave_temporal
            else ""),
-        f"{'✅' if datos else '❌'} Respuesta del backend: {estado} {json.dumps(datos) if datos else ''}",
+        f"{'✅' if respuesta_ok else '❌'} Respuesta del backend: {estado} {_recortar(datos)}",
     ]
 
     clasica = ejecutar(host, puerto, "-groups", "X25519", *confianza)
     rechazo_ok = clasica.rechazado_por_el_servidor
     lineas.append(f"{'✅' if rechazo_ok else '❌'} Cliente solo X25519 clásico: "
                   f"{clasica.describir()}")
-    return grupo_ok and bool(datos) and rechazo_ok, lineas
+    return grupo_ok and respuesta_ok and rechazo_ok, lineas
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -102,12 +102,18 @@ que usa OpenSSL 3.0. Sus tests de integración se saltan en Windows y en CI.
 ```bash
 python3 -m quantum_ready.gateway.backend_prueba &    # HTTP sin TLS en :8080
 python3 -m quantum_ready.gateway.proxy &             # TLS híbrido en :8443
-python3 -m quantum_ready.gateway.verificar
+python3 -m quantum_ready.gateway.verificar --ruta /hallazgos
 python3 -m quantum_ready.gateway.carga               # 30 clientes simultáneos
 ```
 
-**Pendiente:** un backend de prueba más realista que el actual, que solo
-devuelve respuestas fijas (`/`, `/lento`, `/grande`).
+**Backend de prueba:** sirve en solo lectura los hallazgos del escáner de la
+Fase 1 sobre el inventario de ejemplo: `/hallazgos` (lista resumida),
+`/hallazgos/{id}` (detalle, 404 si no existe) y `/salud`. Reutiliza el escáner
+y el inventario de la Fase 1 y toma los datos de `informe.json`, o escanea al
+arrancar si no existe. Mantiene `/lento` y `/grande` para las pruebas de carga
+y de corte. Sigue siendo un backend **de prueba**, no un servicio de
+producción: solo da al gateway algo con sentido que proteger, con datos reales
+del proyecto.
 
 ## Estructura del proyecto
 
@@ -127,7 +133,7 @@ resultados_overhead.referencia.json     medición de referencia de la Fase 3
 
 ## Estado
 
-**4 fases completas y la 5.ª en curso · 437 tests (pytest; 12 de ellos solo en Linux con OpenSSL 3.5+) · probado en Windows con Python 3.13 y en Ubuntu 26.04 (WSL2) con Python 3.14.**
+**4 fases completas y la 5.ª en curso · 453 tests (pytest; 13 de ellos solo en Linux con OpenSSL 3.5+) · probado en Windows con Python 3.13 y en Ubuntu 26.04 (WSL2) con Python 3.14.**
 
 ## Decisiones técnicas destacadas
 
