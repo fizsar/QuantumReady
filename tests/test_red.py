@@ -16,8 +16,12 @@ BYTES = {  # (Cliente → Servidor, Servidor → Cliente)
     "mlkem768": (1184, 1088),
     "hibrido": (1216, 1120),
 }
-# Holgura para el planificador del sistema operativo al medir tiempos
-TOLERANCIA_S = 0.015
+# Margen por encima de la latencia esperada en los tests de tiempos. El mínimo
+# (>= latencia) es estricto: demuestra que la latencia se aplica. El máximo solo
+# detecta una latencia muy excesiva, y con 15 ms fallaba ~1 de cada 18 veces en
+# Windows con la máquina cargada (72 ms medidos para 50 ms). 50 ms absorbe los
+# retrasos del planificador del sistema operativo y de un runner de CI compartido.
+TOLERANCIA_S = 0.050
 
 
 # --- Latencia inyectada ---------------------------------------------------------------
