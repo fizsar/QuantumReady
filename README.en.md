@@ -145,6 +145,7 @@ resultados_overhead.referencia.json     Phase 3 reference measurement
 
 - [Detailed documentation by phase](docs/phases.md): formats, rulebook, risk
   model, benchmark methodology and report structure.
+- [Development conventions and project lessons](CONTRIBUTING.en.md).
 
 ## From proof of concept to product architecture
 

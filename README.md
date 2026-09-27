@@ -141,6 +141,7 @@ resultados_overhead.referencia.json     medición de referencia de la Fase 3
 
 - [Documentación detallada por fase](docs/fases.md): formatos, libro de reglas,
   modelo de riesgo, metodología del benchmark y estructura del informe.
+- [Convenciones de desarrollo y lecciones del proyecto](CONTRIBUTING.md).
 
 ## De prueba de concepto a arquitectura de producto
 
